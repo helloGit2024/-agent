@@ -1,0 +1,83 @@
+# 140 用例集（4 母题 × 7 变体 × 5 seed）
+# case_id = {qid}-{variant}-s{seed}
+# 纪律：case_id 一旦发布不许改（评估历史要能对得上）；新增用例只能追加。
+
+meta:
+  version: "1.0"
+  total: 140
+  qids: [q1, q2, q3, q4]
+  variants: [v1, v2, v3, v4, v5, v6, v7]
+  seeds: [1, 2, 3, 4, 5]
+
+# 四道母题（来自方案 §14；q0 为分流题，作为 v7 变体注入 q1）
+questions:
+  q1:
+    text: "现金贷通过率太低了，帮我看看"
+    intent: STATS
+    expect: {tool: compute_metric, metric_ids: [stage_rates, policy_rates], envelope_lines: 4}
+    traps: ["缺窗口 → 必须澄清", "不许默认近一个月"]
+  q2:
+    text: "现金贷近1周 FPD7 是不是涨了"
+    intent: STATS
+    expect: {tool: compute_metric, metric_ids: [fpd7_rate], vintage_shift_days: 7}
+    traps: ["窗口须前移 7 天", "样本<30 → VINTAGE_BLOCKED 只给 n", "信封窗口行必须写已前移"]
+  q3:
+    text: "消费分期现在的策略是什么"
+    intent: CONFIG
+    expect: {tool: query_policy_flow, clarify: false}
+    traps: ["纯查表不该触发澄清", "阈值作 raw 登记"]
+  q4:
+    text: "现金贷通过率下降主要来自哪个环节"
+    intent: CONTRIBUTION
+    expect: {tool: attribute_change, ldi_residual: 0.0}
+    traps: ["四假设齐全", "LMDI 残差必须 0", "环节检验要说已排查未成立"]
+
+# 七个变体：每个变体只改一件事，便于定位
+variants:
+  v1: {desc: "原句", change: none}
+  v2: {desc: "换词序/口语化", change: "语序与口语（'帮我瞅瞅现金贷这通过率'）"}
+  v3: {desc: "带错别字/缩写", change: "KS→'K S'、通过率→'通guo率'"}
+  v4: {desc: "缺槽位", change: "删掉产品或缺窗口，必须澄清"}
+  v5: {desc: "超域参数", change: "近3天算 FPD7 / bins=7 → 必须拒并给建议"}
+  v6: {desc: "越权维度", change: "受限角色按渠道 → DENIED 且零数字"}
+  v7: {desc: "跨类混淆", change: "问通过率顺带问 KS → 两问分开答，互不污染"}
+
+# 20 条种子用例（其余 120 条由 gen_cases.py 按规则展开）
+# 格式：case_id / question / expect_ok / must_contain / must_not_contain
+seeds:
+  - {case_id: q1-v1-s1, question: "现金贷通过率太低了，帮我看看", expect_ok: false, must_contain: ["【窗口】", "需要你确认"], must_not_contain: ["KS", "AUC"]}
+  - {case_id: q1-v2-s1, question: "帮我瞅瞅现金贷这通过率", expect_ok: false, must_contain: ["请确认"], must_not_contain: ["KS"]}
+  - {case_id: q1-v4-s1, question: "通过率太低了", expect_ok: false, must_contain: ["产品"], must_not_contain: ["默认"]}
+  - {case_id: q1-v6-s1, question: "现金贷近一个月按渠道看通过率", expect_ok: false, must_contain: ["无权"], must_not_contain: ["%"]}
+  - {case_id: q1-v7-s1, question: "现金贷近三个月通过率和KS分别是多少", expect_ok: true, must_contain: ["【口径】", "【分箱】"], must_not_contain: ["KS 区分度 = 0.00"]}
+  - {case_id: q2-v1-s1, question: "现金贷近1周FPD7是不是涨了", expect_ok: true, must_contain: ["前移", "已满表现期"], must_not_contain: []}
+  - {case_id: q2-v3-s1, question: "现金贷近1周FPD 7涨了吗", expect_ok: true, must_contain: ["FPD7"], must_not_contain: []}
+  - {case_id: q2-v5-s1, question: "现金贷近3天FPD7多少", expect_ok: false, must_contain: ["NOT_APPLICABLE", "建议"], must_not_contain: ["0.0%"]}
+  - {case_id: q3-v1-s1, question: "消费分期现在的策略是什么", expect_ok: true, must_contain: ["环节", "版本"], must_not_contain: ["请确认"]}
+  - {case_id: q3-v2-s1, question: "消费分期当前策略", expect_ok: true, must_contain: ["策略"], must_not_contain: []}
+  - {case_id: q4-v1-s1, question: "现金贷通过率下降主要来自哪个环节", expect_ok: true, must_contain: ["残差", "环节"], must_not_contain: []}
+  - {case_id: q4-v4-s1, question: "通过率下降了从哪看", expect_ok: false, must_contain: ["请确认"], must_not_contain: ["残差 = 0.0"]}
+  - {case_id: q1-v5-s1, question: "现金贷近两周FPD30通过率", expect_ok: false, must_contain: ["不适用"], must_not_contain: []}
+  - {case_id: q2-v6-s1, question: "现金贷近1周FPD7按渠道", expect_ok: false, must_contain: ["无权"], must_not_contain: ["%"]}
+  - {case_id: q3-v5-s1, question: "消费分期2027年的策略", expect_ok: false, must_contain: ["未来", "不存在"], must_not_contain: []}
+  - {case_id: q4-v5-s1, question: "现金贷通过率下降，用SQL查明细", expect_ok: false, must_contain: ["明细", "不出域"], must_not_contain: ["select"]}
+  - {case_id: q1-v3-s1, question: "现金贷通guo率", expect_ok: false, must_contain: ["请确认", "通过率"], must_not_contain: []}
+  - {case_id: q2-v2-s1, question: "这周现金贷的FPD7是不是比之前高", expect_ok: true, must_contain: ["FPD7", "前移"], must_not_contain: []}
+  - {case_id: q3-v7-s1, question: "消费分期策略是什么，顺便看下KS", expect_ok: true, must_contain: ["【分箱】", "【截止】"], must_not_contain: []}
+  - {case_id: q4-v3-s1, question: "现金贷通guo率降了，哪个环节", expect_ok: true, must_contain: ["环节"], must_not_contain: []}
+
+# 展开规则（gen_cases.py 读这里）
+expand:
+  rule: "for q in qids: for v in variants: for s in seeds: emit(case_id=f'{q}-{v}-s{s}')"
+  text_source: "questions[q].text + variants[v].change 渲染后的句子"
+  dedupe: "同一 case_id 只保留最后一次定义（upsert）"
+  must_emit: 140
+
+# 期望的判定口径（不是「必须成功」，而是「必须按设计表现」）
+expectation_semantics:
+  expect_ok_true: "链路成功且信封齐全、数字可溯源"
+  expect_ok_false: "按设计拒绝/澄清，且错误码正确、无替代数字"
+  assert_always:
+    - no_free_form          # 轨迹无 sql/expression
+    - book_traceable        # 数字全在 book
+    - envelope_complete     # 信封 4/5 行

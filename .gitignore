@@ -1,0 +1,10 @@
+artifacts/*.db
+artifacts/*.db-journal
+lab.db
+artifacts/ref/*.json
+artifacts/*.log
+.env
+*.key
+__pycache__/
+*.pyc
+.DS_Store

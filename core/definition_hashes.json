@@ -1,0 +1,26 @@
+{
+  "approval_rate": {
+    "hash": "4be24d8ec1c9c3c3",
+    "version": "1.2"
+  },
+  "fpd30_rate": {
+    "hash": "7baee990e93af23f",
+    "version": "2.0"
+  },
+  "fpd7_rate": {
+    "hash": "2b42f4ced8a4256d",
+    "version": "2.0"
+  },
+  "mob3_bad_rate": {
+    "hash": "118979370aada263",
+    "version": "1.0"
+  },
+  "policy_rates": {
+    "hash": "7c5b221093f71165",
+    "version": "1.2"
+  },
+  "stage_rates": {
+    "hash": "22cf6ccd736836bc",
+    "version": "1.1"
+  }
+}
