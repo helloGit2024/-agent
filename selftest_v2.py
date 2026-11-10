@@ -811,6 +811,46 @@ def main() -> None:
     finally:
         llm.set_enabled(old_enabled); llm.MODEL = old_model
 
+    # ---------------------------------------------------------------
+    print("\n[21] 闸门 ①：token→角色→scope，无 token 一律 DENIED（S1 T-206）")
+    adm21 = adm_mod.Admission()
+    denied21 = adm21.authorize(None)
+    check("无 token → DENIED + D4，文案无「查不到」且零数字",
+          denied21["code"] == "DENIED" and denied21["degrade"] == "D4"
+          and not denied21["ok"] and "查不到" not in denied21["answer"]
+          and not any(ch.isdigit() for ch in denied21["answer"]), str(denied21))
+
+    fake21 = adm21.authorize("unregistered-selftest-token")
+    check("假 token 与无 token 同样拒答，不泄露身份是否存在",
+          fake21 == denied21 and "unregistered-selftest-token" not in str(fake21),
+          str(fake21))
+
+    adm21.register_token("selftest-positive-token", role="risk_analyst",
+                         tenant="risk-lab")
+    granted21 = adm21.authorize("selftest-positive-token")
+    scope21 = granted21.get("scope") or {}
+    check("合法 token → 服务端角色 + 租户 + 两册分别编译的 scope",
+          granted21.get("ok") and granted21.get("role") == "risk_analyst"
+          and scope21.get("tenant") == "risk-lab"
+          and "loan_amount" in scope21["aggregate"]["metrics"]
+          and "ks" in scope21["model"]["metrics"]
+          and not set(scope21["aggregate"]["metrics"]) & set(scope21["model"]["metrics"])
+          and "selftest-positive-token" not in repr(adm21), str(granted21))
+
+    adm21.register_token("selftest-restricted-token", role="analyst_no_channel")
+    restricted21 = adm21.authorize("selftest-restricted-token")["scope"]
+    check("scope 编译继承维度/行权限，不把越权参数留到取数后处理",
+          "channel" not in restricted21["aggregate"]["dimensions"]["approval_rate"]
+          and restricted21["row_filter"] == {"product": ["P_CASH_001"]}
+          and "loan_amount" not in restricted21["aggregate"]["metrics"],
+          str(restricted21))
+
+    adm21._identities[adm_mod._token_key("selftest-unknown-role")] = {
+        "role": "not_registered", "tenant": "risk-lab"}
+    unknown21 = adm21.authorize("selftest-unknown-role")
+    check("token 映射到未知角色 → fail-closed，不退回默认角色",
+          unknown21 == denied21, str(unknown21))
+
     db.close()
     print("\n" + "═" * 78)
     print(f"自检结果：{PASS} 条通过 / {FAIL} 条失败")
