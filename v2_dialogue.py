@@ -336,13 +336,18 @@ class DialogEngine:
         # ★ 理解层是 LLM 的落点 #1（V2.5 §6）。S0 阶段开关默认关，
         #   关闭时 fallback 就是**规则版本身** —— 走的是同一条路，不是两条分支。
         #   所以"接模型"这件事的行为差异，只会体现在 plan_source 上。
+        degrade = degrade_reason = None
         if state.get("parsed"):
             parsed, plan_source = state["parsed"], "state"
         else:
             res = llm.plan(state["question"], "auto",
                            lambda: intent.parse(state["question"]),
-                           role=state.get("role"))
+                           role=state.get("role"),
+                           session_id=state.get("session_id"))
             plan_source = res.pop("source", "rules")
+            # D2 是"发生过的事件"，必须留在 trace/findings 里，不许静默吞掉
+            degrade = res.pop("degrade", None)
+            degrade_reason = res.pop("degraded_reason", None)
             parsed = res
         pend = intent.build_clarify(parsed) if parsed["missing"] else None
         # 最多两轮澄清：两轮之后仍然缺，就按"可用默认"继续，并在回答里声明
@@ -357,9 +362,15 @@ class DialogEngine:
             lines.append(f"[understand] 缺参数 {parsed['missing']} → 需要澄清")
         elif parsed.get("notes"):
             lines.append(f"[understand] 声明：{'；'.join(parsed['notes'])}")
+        findings = {"intent": parsed["intent"], "parsed": parsed,
+                    "plan_source": plan_source}
+        if degrade:
+            lines.append(f"[understand] ✘ LLM 规划不可用（{degrade_reason}）"
+                         f"→ {degrade} 回退规则版（口径不变）")
+            findings["plan_degrade"] = degrade
+            findings["plan_degrade_reason"] = degrade_reason
         return {"parsed": parsed, "pending": pend, "trace": lines,
-                "findings": {"intent": parsed["intent"], "parsed": parsed,
-                             "plan_source": plan_source}}
+                "findings": findings}
 
     def _fill_defaults(self, parsed: dict) -> dict:
         """两轮澄清后仍缺参数时的兜底：用显式默认值继续，并在回答中声明。"""

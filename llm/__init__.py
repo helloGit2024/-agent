@@ -34,12 +34,15 @@ LLM 只出现在两个位置，且两个位置都不许碰数字
 from __future__ import annotations
 
 import os
+import zlib
 from dataclasses import dataclass
 
 from core import semantic_contract
+from llm.call import LLMUnavailable
 
 # 固定版本，升级走"影子模式"（§16.1 第一条）：新模型与旧模型并行跑 140 用例
-MODEL = "pending-s1"
+# None = 跟随 llm/planner.PLAN_MODEL（版本号只有一处，别抄第二份）
+MODEL: str | None = None
 ENV_FLAG = "BTA_LLM"            # off（默认）/ on
 
 _ENABLED = os.environ.get(ENV_FLAG, "off").lower() in ("1", "on", "true", "yes")
@@ -58,14 +61,6 @@ def set_enabled(flag: bool, model: str | None = None) -> None:
     _ENABLED = bool(flag)
     if model:
         MODEL = model
-
-
-def provider() -> object | None:
-    """返回 LLM 客户端。**未启用时返回 None** —— 调用方不许自己 new 一个。"""
-    if not _ENABLED:
-        return None
-    # S1 在这里接私有化部署的客户端（数据不出域是合规红线）。
-    raise RuntimeError("LLM 已启用但未接入客户端：S1 阶段才实现 provider()")
 
 
 # ---------------------------------------------------------------------------
@@ -100,11 +95,16 @@ class Budget:
 # LLM #1：规划
 # ---------------------------------------------------------------------------
 def plan(question: str, branch: str, fallback, role: str | None = None,
-         budget: Budget | None = None) -> dict:
+         budget: Budget | None = None, session_id: str | None = None,
+         provider=None, model: str | None = None) -> dict:
     """返回一份计划。关闭时 = 规则版结果（逐位一致，这是 S0 的验收方式）。
 
     fallback 必须是**无参可调用**，且内部就是规则版 intent.parse + 计划生成。
     这样"关闭 LLM"不产生任何额外分支：走的是同一条路。
+
+    打开时：LLM 规划失败（超时 / schema 两次不合规 / 跨册引用）一律 D2 ——
+    **回退规则版并打标记**，不抛异常、不给替代计划。降级是编排层能看见的
+    一次事件（degrade="D2" + degraded_reason），不是一次静默重试。
     """
     budget = budget or Budget()
     if not _ENABLED:
@@ -112,12 +112,28 @@ def plan(question: str, branch: str, fallback, role: str | None = None,
         out.setdefault("source", "rules")
         return out
     if budget.exhausted():
-        out = dict(fallback())
-        out["source"] = "rules"
-        out["degraded_reason"] = "budget"
-        return out
-    client = provider()
-    raise RuntimeError(f"S1 才实现：用 {MODEL} 规划，客户端={client!r}")
+        return _d2(fallback, "budget")
+    try:
+        from llm.planner import PLAN_MODEL, PlanRejected, plan_llm
+        return plan_llm(question, role=role, budget=budget,
+                        seed=_seed(session_id), provider=provider,
+                        model=model or MODEL or PLAN_MODEL)
+    except (LLMUnavailable, PlanRejected) as e:
+        return _d2(fallback, getattr(e, "reason", None) or "plan_rejected")
+
+
+def _seed(session_id: str | None) -> int | None:
+    """会话级种子：同一会话可复现。用 crc32 而不是 hash() —— 后者每个进程加盐。"""
+    return None if not session_id else zlib.crc32(session_id.encode("utf-8"))
+
+
+def _d2(fallback, reason: str) -> dict:
+    """D2：规划失败回退规则版。标记必须带出去，否则降级等于没发生。"""
+    out = dict(fallback())
+    out["source"] = "rules"
+    out["degrade"] = "D2"
+    out["degraded_reason"] = reason
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -195,5 +211,15 @@ def validate_plan(plan_json: dict, role: str | None = None) -> dict:
 
 def describe() -> dict:
     """给运维看的一行状态（不许包含任何密钥/地址）。"""
-    return {"enabled": _ENABLED, "model": MODEL,
+    return {"enabled": _ENABLED, "model": _model_name(),
             "env_flag": f"{ENV_FLAG}={os.environ.get(ENV_FLAG, 'off')}"}
+
+
+def _model_name() -> str:
+    if MODEL:
+        return MODEL
+    try:
+        from llm.planner import PLAN_MODEL
+        return PLAN_MODEL
+    except Exception:                                       # noqa: BLE001
+        return "unset"

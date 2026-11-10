@@ -96,7 +96,10 @@ def _normalize(data: dict, question: str, as_of: str) -> dict:
                    "product_name": (knowledge.PRODUCTS.get(prod) or {}).get("name"),
                    "window": None, "metrics": [], "dimension": None}
     missing: list[str] = []
-    notes: list[str] = list(data.get("notes") or [])
+    # ★ notes 是"口径声明"，只由系统生成。LLM 自写的 notes 不采信 ——
+    #   实测它会写"PSI 必须指定基准期，当前未提供"，而系统已经默认了基准期，
+    #   两句一起输出就是自相矛盾。口径声明错了比没有更糟（P-09）。
+    notes: list[str] = []
 
     wt = (data.get("window_text") or "").strip() or None
     win = catalog.parse_window(wt, as_of) if wt else None
@@ -149,6 +152,9 @@ def _normalize(data: dict, question: str, as_of: str) -> dict:
         if it == intent.INTENT_UNKNOWN:
             # 语义歧义（branch）只许 LLM 举手；其余缺失由系统判定，不信模型
             missing = ["branch"] if "branch" in (data.get("missing") or []) else ["intent"]
+            if missing == ["branch"]:
+                notes.append("这句话既可能在问模型指标（KS/AUC/PSI），"
+                             "也可能在问策略指标（通过率/拒绝率）；先确认再算")
 
     slots["window"] = win
     trigger = "ambiguous" if missing == ["branch"] else "llm"

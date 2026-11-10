@@ -619,7 +619,7 @@ def main() -> None:
 
     # ---------------------------------------------------------------
     print("\n[17] LLM 规划：prompt→plan→validate_plan（S1 T-202）")
-    import llm.plan as llm_plan      # 注意：from llm import plan 会拿到 __init__ 里的同名函数
+    import llm.planner as llm_plan    # 子模块不叫 plan：同名会遮蔽 llm.plan() 函数
 
     def _plan_json(**kw):
         base = {"intent": "STATS", "product": "P_CASH_001",
@@ -680,6 +680,42 @@ def main() -> None:
     except llm_call.LLMUnavailable as e:
         t8 = e.reason == "schema" and p8.calls == 2
     check("编造指标 id → schema enum 拦截（LLMUnavailable/schema）", t8)
+
+    # ---------------------------------------------------------------
+    print("\n[18] BTA_LLM 开关 + D2 降级（S1 T-203）")
+    old_enabled, old_model = llm.enabled(), llm.MODEL
+    q3 = "现金贷近三个月的 KS 是多少"
+
+    # ① 开关关闭：直通规则版，且**不**多出任何标记（逐字节一致的开关语义）
+    off = llm.plan(q3, "auto", lambda: intent.parse(q3))
+    check("开关关闭：plan 直通规则版（source=rules，无 degrade 标记）",
+          off["source"] == "rules" and "degrade" not in off
+          and off["intent"] == intent.parse(q3)["intent"], str(off.get("intent")))
+
+    llm.set_enabled(True, model="m-v1")
+    try:
+        good = _plan_json(intent="MODEL_DIAG", window_text="近三个月",
+                          metrics=[], model_metric="ks", dimension="overall")
+        # ② 开关打开且 LLM 可用：计划来自 LLM，intent/scope 仍与规则版一致
+        r9 = llm.plan(q3, "auto", lambda: intent.parse(q3),
+                      session_id="S-1", provider=_Fake([good]))
+        check("开关打开：LLM 计划生效（source=llm），intent/scope 与规则版一致",
+              r9["source"] == "llm" and r9["intent"] == intent.parse(q3)["intent"]
+              and r9["slots"]["model_metric"] == "ks"
+              and r9["plan_meta"]["seed"] == llm._seed("S-1"),
+              str(r9.get("plan_meta")))
+
+        # ③ 反向：LLM 超时 → D2 回退规则版，不抛异常，降级标记可观测
+        r10 = llm.plan(q3, "auto", lambda: intent.parse(q3), session_id="S-1",
+                       provider=_Fake([llm_call.ProviderTimeout("read timeout")]))
+        check("LLM 超时 → D2 回退规则版（不抛异常，degrade 标记可观测）",
+              r10["source"] == "rules" and r10.get("degrade") == "D2"
+              and r10.get("degraded_reason") == "timeout"
+              and r10["intent"] == intent.parse(q3)["intent"],
+              f"{r10.get('degrade')}/{r10.get('degraded_reason')}")
+    finally:
+        llm.set_enabled(old_enabled)
+        llm.MODEL = old_model
 
     db.close()
     print("\n" + "═" * 78)
