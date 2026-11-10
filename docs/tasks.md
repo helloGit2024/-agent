@@ -26,7 +26,7 @@
 
 | ID | 任务 | 落点 | 验收 | 依赖 | 规模 |
 |---|---|---|---|---|---|
-| T-201 | `llm/call.py` 统一出口 + provider 适配 | `llm/call.py`、`llm/providers/qwen.py` | 4 条单测（正常/重试/超时/schema 不过）；全库 grep 无 `import openai` | — | M |
+| T-201 | `llm/call.py` 统一出口 + provider 适配 | `llm/call.py`、`llm/providers/__init__.py`+`qwen.py`（新建）、`selftest_v2.py`（§16 +4 断言）、`ci/gate_all.py`（计数 84→88） | 4 条单测（正常/重试/超时/schema 不过）；全库 grep 无 `import openai` | — | M |
 | T-202 | `llm/plan.py`：prompt → plan → `validate_plan` | `llm/plan.py`、`llm/context.py` | 10 题里 8 题 LLM 计划与规则计划 `intent/scope` 一致 | T-201 | M |
 | T-203 | `BTA_LLM` 开关 + D2 降级 | `v2_dialogue.n_understand` | 关开关行为与 S0.9 逐字节一致（回归基线过） | T-202 | S |
 | T-204 | 闸门 ② 计划校验增强：跨册引用直接拒 | `v2_dialogue.validate_plan_v2` | 造 `branch=model` + `compute_metric` → 拒绝且不改写 | T-202 | S |

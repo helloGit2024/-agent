@@ -555,6 +555,68 @@ def main() -> None:
                and before and not after and ran.get("code") == "JOB_RETIRED"),
           f"pend={pend} before={before} after={after} ran={ran.get('code')}")
 
+    # ---------------------------------------------------------------
+    print("\n[16] LLM 统一出口：固定参数 / 重试 / 超时 / schema 校验（S1 T-201）")
+    from llm import call as llm_call
+
+    class _Fake:
+        """按剧本应答的假 provider —— 单测不碰网络，P-08 的边界才可信。"""
+        NAME = "fake"
+        SUPPORTS_SEED = True
+
+        def __init__(self, script):
+            self.script, self.calls = list(script), 0
+
+        def chat(self, messages, **kw):
+            self.calls += 1
+            item = self.script.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    _schema = {"type": "object", "additionalProperties": False,
+               "required": ["intent"],
+               "properties": {"intent": {"enum": ["STATS", "MODEL_DIAG"]}}}
+    _good = {"text": '{"intent": "STATS"}', "usage": {"total_tokens": 12}}
+
+    # ① 正常：结构 {data,usage,meta}，审计字段齐，预算记账
+    p1, b1 = _Fake([_good]), llm.Budget()
+    r1 = llm_call.call("plan", "问：通过率", _schema,
+                       model="qwen3-30b-a3b-instruct-2507",
+                       budget=b1, provider=p1, seed=42)
+    check("统一出口正常返回：temperature=0 / seed / schema_hash 可审计，预算入账",
+          r1["data"] == {"intent": "STATS"} and r1["meta"]["attempts"] == 1
+          and r1["meta"]["temperature"] == 0 and r1["meta"]["seed"] == 42
+          and r1["meta"]["schema_hash"] == llm_call.schema_hash(_schema)
+          and bool(r1["meta"]["output_hash"])
+          and b1.calls == 1 and b1.tokens == 12, str(r1.get("meta")))
+
+    # ② 重试：第一次不合 schema，第二次合规 → 成功且恰好 2 次尝试
+    p2 = _Fake([{"text": '{"foo": 1}', "usage": {"total_tokens": 3}}, _good])
+    r2 = llm_call.call("plan", "q", _schema, model="m-v1", provider=p2)
+    check("输出不合 schema → 重试 1 次后成功（attempts=2）",
+          r2["data"] == {"intent": "STATS"} and r2["meta"]["attempts"] == 2
+          and p2.calls == 2, str(r2.get("meta")))
+
+    # ③ 超时：立即 LLMUnavailable/timeout，不重试（重试超时请求只会放大雪崩）
+    p3 = _Fake([llm_call.ProviderTimeout("read timeout"), _good])
+    try:
+        llm_call.call("plan", "q", _schema, model="m-v1", provider=p3)
+        t3 = False
+    except llm_call.LLMUnavailable as e:
+        t3 = e.reason == "timeout" and p3.calls == 1
+    check("超时 → LLMUnavailable/timeout 且不重试（上层走 D2）", t3)
+
+    # ④ schema 两次不合规：重试额度只有 1 次，用完即失败 —— 不给替代答案（P-10）
+    p4 = _Fake([{"text": '{"foo": 1}', "usage": {}},
+                {"text": '{"bar": 2}', "usage": {}}])
+    try:
+        llm_call.call("plan", "q", _schema, model="m-v1", provider=p4)
+        t4 = False
+    except llm_call.LLMUnavailable as e:
+        t4 = e.reason == "schema" and p4.calls == 2
+    check("两次都不合 schema → LLMUnavailable/schema（重试额度恰好 1 次）", t4)
+
     db.close()
     print("\n" + "═" * 78)
     print(f"自检结果：{PASS} 条通过 / {FAIL} 条失败")
