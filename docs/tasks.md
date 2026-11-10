@@ -53,6 +53,9 @@
 
 **S1.5 出口**：四份笔记 + 吸收清单 5 条逐条有归属（吸收→挂任务 / 拒绝→写明理由 / 待定→挂 OPEN-QUESTIONS）+ ADR-006 草稿；T-306/T-307 开工前必须收口。
 
+> R-001 进度：源码三处精读已交付（`docs/research/supersonic-notes.md`）。
+> 3 题实测待补：Docker Hub 不可达（`registry-1.docker.io` 超时），镜像改走 daocloud 源仍在拉取，阻塞证据见笔记 §5。
+
 ## 阶段 S2 · MCP server
 
 | ID | 任务 | 落点 | 验收 | 依赖 | 规模 |
