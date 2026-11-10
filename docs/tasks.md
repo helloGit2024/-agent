@@ -53,8 +53,8 @@
 
 **S1.5 出口**：四份笔记 + 吸收清单 5 条逐条有归属（吸收→挂任务 / 拒绝→写明理由 / 待定→挂 OPEN-QUESTIONS）+ ADR-006 草稿；T-306/T-307 开工前必须收口。
 
-> R-001 进度：源码三处精读已交付（`docs/research/supersonic-notes.md`）。
-> 3 题实测待补：Docker Hub 不可达（`registry-1.docker.io` 超时），镜像改走 daocloud 源仍在拉取，阻塞证据见笔记 §5。
+> R-001 ✅：源码三处精读 + 3 题实测已完成（`docs/research/supersonic-notes.md`）。
+> 关键实测证据：模型里没有的「退款率」在 STRICT 下 `FAILED`，切到 LOOSE 后被就近解释成「访问次数+访问用户数」并返回 `COMPLETED`——放宽匹配 = 拿别的指标冒充答案，正是 P-05/P-10 要堵的。
 
 ## 阶段 S2 · MCP server
 

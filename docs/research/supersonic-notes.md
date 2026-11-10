@@ -109,15 +109,38 @@
 
 ## 5. 实测（3 个语义问题）
 
-**状态：未完成（环境阻塞，不伪造结果）。**
+**状态：已完成（2026-11-10）。**
 
-- 目标：`docker compose up` 起 `supersonic_standalone` + `supersonic_postgres`，用 3 个问题实测，
-  其中 1 个必须是模型里不存在的东西（验证"不可答"怎么说）。
-- 阻塞证据：
-  - `https://registry-1.docker.io/v2/` 超时（`curl` 返回 `000`，15s），`docker compose up` 报
-    `failed to resolve reference "docker.io/supersonicbi/supersonic:latest": context deadline exceeded`。
-  - 已改用 `docker.m.daocloud.io` 镜像源拉取（连通，`/v2/` 返回 401 属正常鉴权响应），拉取进行中。
-- 待补：服务起来后在此记录 3 个问题的 `queryText / ParseState / queryMode / 返回文案`。
+### 环境
+
+- 镜像：`supersonicbi/supersonic:latest`（digest `sha256:89f708be…`，linux/arm64，2.58GB）+ `pgvector/pgvector:pg17`。
+- 启动：`docker/docker-compose.yml`，`BTA` 侧无改动；两个坑记在这里备查：
+  1. Docker Hub 直连超时，须走镜像源并从 Docker Desktop 的 **No proxy** 模式拉取（内置 `http.docker.internal:3128` 只放行 Hub 域名，会把镜像源卡死，实测 10 分钟 0 字节）。
+  2. compose 用 bind mount `./supersonic_pg/data`，macOS 上 uid 不匹配导致 postgres 起不来；改用命名卷（`docker-compose.override.yml`）即可。
+- 演示数据：standalone 启动时由 `S2*demo` 自动写入，共 3 个数据集 / 7 个模型。
+  测试用数据集 **1「超音数数据集」**（model 2：指标 `访问次数 / 访问用户数 / 人均访问次数`，维度 `数据日期 / 用户名`）。
+- 登录：`admin`。库里种子密码哈希与文档密码不一致，按 `AESEncryptionUtil` 的规则（PBKDF2WithHmacSHA256, 65536 轮, salt=SHA256(user)[:16], AES/CBC/`supersonic@bicom`）重算后写回才登得进去。
+- 解析方式：`POST /api/semantic/query/chat/parse`，`text2SQLType=ONLY_RULE`（未配 LLM，正好只看规则路径）。
+
+### 结果
+
+| # | queryText | mapMode | ParseState | queryMode | 解析出的元素 | 时间 |
+|---|---|---|---|---|---|---|
+| 1 | 近7天访问次数 | STRICT | `COMPLETED` | `METRIC_MODEL` | 指标：访问次数 | 2026-11-03 ~ 11-10（`detectWord=近7天`） |
+| 2 | 按用户名统计访问人数 | STRICT | `COMPLETED` | `METRIC_GROUPBY` | 指标：访问用户数；维度：用户名 | 2026-11-03 ~ 11-10（**`detectWord=None`，窗口是系统补的**） |
+| 3 | 昨天的退款率是多少 | STRICT | `FAILED` | — | 无 | `errorMsg="No semantic entities can be mapped against user question."` |
+| 3' | 昨天的退款率是多少 | **LOOSE** | `COMPLETED` | `METRIC_GROUPBY` | 指标：**访问次数 + 访问用户数**；维度：数据日期 | 昨天 |
+
+### 结论
+
+- **第 3' 行是最有价值的一条证据**：模型里根本没有"退款率"，把模式从 STRICT 放到 LOOSE 之后，
+  它没有报错，而是**就近解释成另外两个指标并返回成功态**。风控场景下这等于"问坏账给你答访问量"，
+  正是 P-05（schema 封闭）和 P-10（算不出给错误码）要堵死的路径。§2 里"不偷嵌入/放宽阈值"由推测变成实测。
+- **失败文案不可诊断**：第 3 行只说"映射不到实体"，无法区分"指标不存在 / 维度不支持 / 窗口不可得"。
+  我们 D3 细分四类是有实际收益的（§3 的"偷"）。
+- **缺省窗口由系统猜**：第 2 行没有时间词，系统直接补近 7 天。我们的 P-09 只允许补全 `product/window`
+  且必须在回答里声明，比它严格，这条继续坚持。
+- **可登录性耦合在种子数据上**：文档密码登不进，必须重算哈希。这类"演示可用、交付不可用"的坑不值得学。
 
 ## 6. 对我们项目的三条候选改动（先记着，不擅自开工）
 
