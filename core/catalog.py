@@ -459,6 +459,53 @@ _reg(MetricDef(
     healthy_range={"high": 0.10, "direction": "lower_better"}))
 
 
+def _m_loan_amount(v: View) -> dict:
+    """放款额：窗口内已放款借据的 loan_amount 汇总。
+
+    ★口径：已放款借据的**原始金额**求和，不分阶、不折现、不含手续费。
+    分母是放款笔数（不是申请数），因为"放款额"的主语是"放款的借据"。
+    """
+    rows = []
+    total = 0.0
+    for ln in v.loans:
+        amt = ln.get("loan_amount")
+        if amt is None:
+            continue
+        d = (ln.get("loan_date") or "")[:10]
+        rows.append({"loan_date": d,
+                     "loan_amount": float(amt),
+                     "apply_id": ln.get("apply_id")})
+        total += float(amt)
+    by_day: dict[str, float] = {}
+    for r in rows:
+        by_day[r["loan_date"]] = by_day.get(r["loan_date"], 0.0) + r["loan_amount"]
+    day_rows = [{"date": k, "loan_amount": round(v, 2)}
+                for k, v in sorted(by_day.items()) if k]
+    return {"value": round(total, 2),
+            "n": len(rows),
+            "avg_per_loan": round(total / len(rows), 2) if rows else None,
+            "by_day": day_rows}
+
+
+_reg(MetricDef(
+    metric_id="loan_amount", name="放款额", kind="scalar", unit="CNY",
+    aliases=("放款额", "放款金额", "放多少钱", "放款规模", "当天放款额"),
+    formula="窗口内已放款借据的 loan_amount 求和",
+    numerator="已放款借据的原始金额", denominator="已放款借据数",
+    grain="LOAN_DATE", lag_days=0, dimensions=("product", "channel", "day"),
+    version="1.0", owner="资产质量组", compute=_m_loan_amount,
+    description=("窗口内所有已放款借据的原始合同金额求和。"
+                 "不含未通过申请、不含未放款授信、不含利息/手续费。"
+                 "同时返回按天聚合表，用于看放款节奏。"),
+    typical_questions=("近一个月每天的放款额",
+                       "这周放了多少钱",
+                       "现金贷放款规模是多少"),
+    disambiguation="",
+    not_applicable="窗口内放款借据 < 1 笔",
+    requires_params={"product": "required", "window": "required"},
+    healthy_range={}))
+
+
 # ---------------------------------------------------------------------------
 # 五、别名解析（歧义显式化，不猜）
 # ---------------------------------------------------------------------------

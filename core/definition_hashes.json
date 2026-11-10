@@ -11,6 +11,10 @@
     "hash": "2b42f4ced8a4256d",
     "version": "2.0"
   },
+  "loan_amount": {
+    "hash": "b1bdd446fc337924",
+    "version": "1.0"
+  },
   "mob3_bad_rate": {
     "hash": "118979370aada263",
     "version": "1.0"

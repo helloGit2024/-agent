@@ -100,7 +100,7 @@ def _reg(m: ModelMetricDef) -> ModelMetricDef:
 
 _reg(ModelMetricDef(
     "ks", "KS 区分度", "scalar", "model_score_v1", "fpd30", "none",
-    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month"), "1.0", "模型组",
+    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month", "day"), "1.1", "模型组",
     aliases=("KS", "ks", "区分度", "K-S"),
     description=("好坏样本累计分布的最大差距，衡量模型把坏人和好人分开的能力。"
                  "取值范围 0~1，越大越好；它是**全分布的累计最大值**，"
@@ -109,7 +109,7 @@ _reg(ModelMetricDef(
 
 _reg(ModelMetricDef(
     "auc", "AUC", "scalar", "model_score_v1", "fpd30", "none",
-    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month"), "1.0", "模型组",
+    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month", "day"), "1.1", "模型组",
     aliases=("AUC", "auc", "曲线下面积"),
     description=("随机取一个坏人一个好人，模型给坏人的分更高的概率。"
                  "0.5 等于瞎猜；风控消费贷通常 0.65~0.75 算可用。"),
@@ -117,13 +117,13 @@ _reg(ModelMetricDef(
 
 _reg(ModelMetricDef(
     "gini", "Gini", "scalar", "model_score_v1", "fpd30", "none",
-    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month"), "1.0", "模型组",
+    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month", "day"), "1.1", "模型组",
     aliases=("GINI", "Gini", "gini", "基尼"),
     description="AUC 的线性变换（2·AUC−1），与 AUC 一一对应，不是独立证据。"))
 
 _reg(ModelMetricDef(
     "iv", "IV 信息值", "bins", "model_score_v1", "fpd30", "none",
-    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month"), "1.0", "模型组",
+    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month", "day"), "1.1", "模型组",
     aliases=("IV", "iv", "信息值"),
     description=("各箱 WOE 的加权和，衡量分数对好坏的区分贡献总量。"
                  "0.02 以下几乎无用，0.3 以上要警惕过拟合或泄漏。"),
@@ -131,7 +131,7 @@ _reg(ModelMetricDef(
 
 _reg(ModelMetricDef(
     "psi", "PSI 稳定性", "scalar", "model_score_v1", "fpd30", "required",
-    DESIGN_MIN_SAMPLE, False, ("product", "month"), "1.0", "模型组",
+    DESIGN_MIN_SAMPLE, False, ("product", "month", "day"), "1.1", "模型组",
     aliases=("PSI", "psi", "稳定性", "漂移"),
     description=("当期分数分布与基准分布的差异。**没有基准期就算不出** —— "
                  "这不是「算得糙」，是根本没定义；不许拿当期跟自己比。"
@@ -140,14 +140,14 @@ _reg(ModelMetricDef(
 
 _reg(ModelMetricDef(
     "lift", "LIFT 提升度", "bins", "model_score_v1", "fpd30", "none",
-    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month"), "1.0", "模型组",
+    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month", "day"), "1.1", "模型组",
     aliases=("LIFT", "lift", "提升度"),
     description=("每箱坏账率相对整体坏账率的倍数。最高分箱的 lift 就是"
                  "「抓最坏的那批人，风险是平均的几倍」。")))
 
 _reg(ModelMetricDef(
     "woe_table", "WOE 分箱表", "bins", "model_score_v1", "fpd30", "none",
-    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month"), "1.0", "模型组",
+    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month", "day"), "1.1", "模型组",
     aliases=("WOE", "woe", "分箱", "单调性", "分箱单调"),
     description=("逐箱的 n / 坏账率 / WOE / IV 贡献 / LIFT / 累计 KS，"
                  "并给出**单调性判定**（坏账率是否随分数单调不减）与破格箱号。"
@@ -161,7 +161,7 @@ _reg(ModelMetricDef(
 #   ③ 人真正要看的是"最优点在哪、面积多大"，不是 100 行坐标。
 _reg(ModelMetricDef(
     "ks_curve", "KS 曲线", "curve", "model_score_v1", "fpd30", "none",
-    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month"), "1.0", "模型组",
+    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month", "day"), "1.1", "模型组",
     aliases=("KS曲线", "累计KS", "ks曲线"),
     description=("累计好坏分布差随分数变化的整条曲线。只回三个摘要量"
                  "（ks_max / at_score / auc_area），逐点数据写入 ref 文件。"
@@ -170,7 +170,7 @@ _reg(ModelMetricDef(
 
 _reg(ModelMetricDef(
     "roc_curve", "ROC 曲线", "curve", "model_score_v1", "fpd30", "none",
-    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month"), "1.0", "模型组",
+    DESIGN_MIN_SAMPLE, True, ("product", "channel", "month", "day"), "1.1", "模型组",
     aliases=("ROC", "roc", "roc曲线"),
     description=("以假正率为横轴、真正率为纵轴的曲线。只回摘要"
                  "（auc_area 与最优点），逐点写入 ref 文件。"

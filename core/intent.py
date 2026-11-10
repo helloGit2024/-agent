@@ -102,12 +102,16 @@ def parse(text: str, as_of: str = catalog.AS_OF,
     notes: list[str] = []
 
     # ★ 听不出意图时必须反问，不能静默返回 empty 计划。
-    #   本项目实测事故：用户说"帮我看看最近放钱放得怎么样"，
-    #   5 条规则全没命中 → intent=UNKNOWN 且 missing=[] →
-    #   对话层认为"参数齐了"直接进执行 → 派发不到实现 → answer=None 白屏。
-    #   听不懂比听错好治：把 UNKNOWN 也做成一个"缺失项"，走同一套澄清通道。
+    #   但：catalog.resolve 已经命中了一个**策略册**指标时，"统计这个指标"
+    #   就是最合理的默认意图 —— 不是反问的 case。模型册指标在 detect_state
+    #   闸门 ⓿ 已经锁分支了，这里只管策略册命中的情况。
     if intent == INTENT_UNKNOWN:
-        missing.append("intent")
+        hit = catalog.resolve(q)
+        if hit.get("metric_id") and hit["metric_id"] not in model_metrics.MODEL_CATALOG:
+            intent = INTENT_STATS
+            trigger = f"metric:{hit['metric_id']}"
+        else:
+            missing.append("intent")
 
     # ---- 产品 ----
     prod = knowledge.resolve_product(q)
@@ -221,6 +225,16 @@ def _parse_model_diag(q: str, metric_id: str, as_of: str) -> dict[str, Any]:
         "dimension": "overall", "bins": model_metrics.DEFAULT_BINS,
         "label": m.label_col,
     }
+
+    # 维度提取：问题里点名了"每天/每月/按渠道" → 模型级指标按该维度聚合。
+    # 没点名 = overall（整体一个值）。这是口径不是偏好，必须从文本显式提取。
+    dim_map = (("每天", "day"), ("按天", "day"), ("日度", "day"),
+               ("每月", "month"), ("按月", "month"), ("月度", "month"),
+               ("按渠道", "channel"), ("渠道", "channel"))
+    for cue, dim in dim_map:
+        if cue in q and dim in m.comparable_dimensions:
+            slots["dimension"] = dim
+            break
     missing: list[str] = []
     notes: list[str] = []
     if not prod["product"]:
@@ -251,6 +265,14 @@ def _parse_model_diag(q: str, metric_id: str, as_of: str) -> dict[str, Any]:
     if m.ref_period == "required":
         slots["ref_period"] = "train_2025Q4"
         notes.append("PSI 需要基准期，默认用【train_2025Q4（2026Q1）】")
+
+    # ---- 归因词检测：模型级指标的"为什么降"链尚未实现，诚实声明 ----
+    # （当前模型级归因执行体不存在，ANOMALY 链只处理策略册指标）
+    _ATTRIB_WORDS = ("原因", "为什么", "为啥", "下降", "升高", "异动", "恶化",
+                     "变差", "涨了", "跌了", "分析", "排查")
+    if any(w in q for w in _ATTRIB_WORDS):
+        notes.append("模型级指标的归因链尚未实现，当前返回指标值供参考；"
+                     "如需归因，请提供同期策略指标（通过率/FPD）做交叉分析")
 
     return {"question": q, "intent": INTENT_MODEL_DIAG, "trigger": metric_id,
             "slots": slots, "missing": missing, "notes": notes}

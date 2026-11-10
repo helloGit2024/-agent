@@ -1,0 +1,62 @@
+# 策略回测 Agent · 用户问题集（日常长尾用例）
+#
+# 使用方式：eval/regress_demo.py 或后续测试脚本可 load 此文件做批量回归。
+# 格式：每条是一个 dict，含 id / question / expected_intent（规则版应识别的意图，
+# 用于快速 sanity check；完整验收看 make gate + 真链路逐题答案）。
+#
+# 想加题？直接在尾部追加 dict —— 不破坏已有条目，新增问题放最后。
+# expected_intent 填规则版识别结果；模型级归因链未实现的问题，
+# 模型级问题意图必为 MODEL_DIAG，且 notes 含"模型级指标的归因链尚未实现"。
+#
+# 2026-11-10 初版 8 题，来源：真实风控策略组日常场景。
+
+questions:
+  - id: Q-001
+    question: "现金贷近一个月，每个环节、每个策略的通过率和拒绝率统计一下"
+    expected_intent: STATS
+    notes: "统计类，stage_rates + policy_rates 双表"
+
+  - id: Q-002
+    question: "现金贷近1周通过率下降、坏账率升高（FPD7）的原因是什么？"
+    expected_intent: ANOMALY
+    notes: "策略级异动归因，FPD7 带到期口径前移"
+
+  - id: Q-003
+    question: "现金贷当前策略是什么？"
+    expected_intent: CONFIG
+    notes: "配置查询，不含指标计算"
+
+  - id: Q-004
+    question: "统计分析一下现金贷当前策略中所有策略节点的贡献，看看哪些需要调整或者进一步 AB test？"
+    expected_intent: CONTRIBUTION
+    notes: "贡献排序，默认近半年窗口"
+
+  - id: Q-005
+    question: "现金贷近一个月每天的放款额"
+    expected_intent: STATS
+    expected_metric: loan_amount
+    notes: "loan_amount 进语义册后可算；同时返回 by_day 表"
+
+  - id: Q-006
+    question: "现金贷模型分近一周每天的 KS 和 LIFT"
+    expected_intent: MODEL_DIAG
+    expected_dimension: day
+    notes: "模型级 dimension=day；ks/lift 各返回每天一个值"
+
+  - id: Q-007
+    question: "昨天现金贷模型分数均值下降了，分析排查一下原因"
+    expected_intent: MODEL_DIAG
+    notes: "⚠ 模型级归因链未实现；当前返回 WOE 分箱表 + notes 声明，需后续任务补"
+
+  - id: Q-008
+    question: "近3天现金贷模型分数 KS 下降了，分析排查一下原因"
+    expected_intent: MODEL_DIAG
+    notes: "⚠ 同 Q-007，模型级归因链未实现"
+
+# --- 长尾预留 ---
+# 下面占位，待日常使用中逐步补充。新题 id 用 Q-nnn 格式，不插队。
+#
+# - id: Q-009
+#   question: ""
+#   expected_intent: ""
+#   notes: ""

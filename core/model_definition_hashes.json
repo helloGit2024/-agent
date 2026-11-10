@@ -1,47 +1,38 @@
 {
   "auc": {
-    "hash": "6090cb6c909937b2",
-    "owner": "\u6a21\u578b\u7ec4",
-    "version": "1.0"
+    "hash": "d925f97b7bf4c964",
+    "version": "1.1"
   },
   "gini": {
-    "hash": "70ea4dc543ccaf59",
-    "owner": "\u6a21\u578b\u7ec4",
-    "version": "1.0"
+    "hash": "a3d797f3ea9e2a1c",
+    "version": "1.1"
   },
   "iv": {
-    "hash": "ade80324dff144d7",
-    "owner": "\u6a21\u578b\u7ec4",
-    "version": "1.0"
+    "hash": "cd9d0966a4b0ef88",
+    "version": "1.1"
   },
   "ks": {
-    "hash": "5576952b096f58e3",
-    "owner": "\u6a21\u578b\u7ec4",
-    "version": "1.0"
+    "hash": "55eb0ea697833a2e",
+    "version": "1.1"
   },
   "ks_curve": {
-    "hash": "4cfe3e913806d642",
-    "owner": "\u6a21\u578b\u7ec4",
-    "version": "1.0"
+    "hash": "c23aebaab53651e6",
+    "version": "1.1"
   },
   "lift": {
-    "hash": "f8e0aed2dbdd7cb1",
-    "owner": "\u6a21\u578b\u7ec4",
-    "version": "1.0"
+    "hash": "7bd8d0fd24e8be81",
+    "version": "1.1"
   },
   "psi": {
-    "hash": "8583257e8761ed23",
-    "owner": "\u6a21\u578b\u7ec4",
-    "version": "1.0"
+    "hash": "01084116b06403bd",
+    "version": "1.1"
   },
   "roc_curve": {
-    "hash": "160f20329b158348",
-    "owner": "\u6a21\u578b\u7ec4",
-    "version": "1.0"
+    "hash": "754bca0ad78d3690",
+    "version": "1.1"
   },
   "woe_table": {
-    "hash": "308817e08169788a",
-    "owner": "\u6a21\u578b\u7ec4",
-    "version": "1.0"
+    "hash": "5f492e1b2e4f20c7",
+    "version": "1.1"
   }
 }
