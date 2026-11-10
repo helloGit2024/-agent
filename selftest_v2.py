@@ -31,6 +31,7 @@ import memory
 from core import (access, anomaly, catalog, entities, envelope, intent,
                   knowledge, model_metrics, ranking, semantic_contract)
 from core.db import Database
+from eval.compare_plans import diff_plans
 from scheduler import registry as sched
 from tools import compute_model_metric as model_tool
 from v2_dialogue import (CFG_CUR, RUN_CUR, DialogEngine, ask,
@@ -925,6 +926,23 @@ def main() -> None:
         broken_db22.close()
     check("关审计写入 → 整个提问抛 DENIED，不被 D2 回退成正常答案",
           e2e_denied22)
+
+    # ---------------------------------------------------------------
+    print("\n[23] 计划对照：只比语义槽位，逐字段暴露两边值（S1 T-208）")
+    rules23 = intent.parse("现金贷近一个月 FPD7 是多少？")
+    same23 = {**rules23, "trigger": "llm", "source": "llm",
+              "plan_meta": {"model": "m-v1"}}
+    check("语义计划相同但路径元数据不同 → 对照表无差异（不制造假分歧）",
+          diff_plans(rules23, same23) == [])
+
+    changed23 = {**same23,
+                 "slots": {**same23["slots"], "product": "P_OTHER"}}
+    diffs23 = diff_plans(rules23, changed23)
+    product_diff23 = next((d for d in diffs23 if d["field"] == "slots.product"), None)
+    check("产品槽位被改坏 → 必须指出 slots.product 及规则/LLM 两边原值",
+          product_diff23 is not None
+          and product_diff23["rules"] == "P_CASH_001"
+          and product_diff23["llm"] == "P_OTHER", str(diffs23))
 
     db.close()
     print("\n" + "═" * 78)
