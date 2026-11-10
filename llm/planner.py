@@ -167,14 +167,16 @@ def _normalize(data: dict, question: str, as_of: str) -> dict:
 # ---------------------------------------------------------------------------
 def plan_llm(question: str, *, role: str | None = None, budget=None,
              seed: int | None = None, provider=None, model: str = PLAN_MODEL,
-             as_of: str = catalog.AS_OF) -> dict:
+             as_of: str = catalog.AS_OF, audit_db=None,
+             session_id: str | None = None) -> dict:
     """返回与 intent.parse 同形的提问单 + source='llm' + plan_meta（审计字段）。
 
     抛出：LLMUnavailable（网关失败）/ PlanRejected（内容越界）。上层据此走 D2。
     """
     resp = call("plan", context.plan_prompt(question), plan_schema(),
                 model=model, budget=budget, provider=provider, seed=seed,
-                prompt_version=PROMPT_VERSION)
+                prompt_version=PROMPT_VERSION, audit_db=audit_db,
+                session_id=session_id)
     data = resp["data"]
 
     from llm import validate_plan            # 延迟 import：避免 llm/__init__ 将来成环

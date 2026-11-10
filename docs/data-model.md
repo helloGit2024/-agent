@@ -56,7 +56,7 @@ CREATE TABLE memory_audit (
 
 ## 3. 新表：调用审计（§12，S1/S2）
 
-> ⚠️ 本节为**设计稿，尚未实现**。S1 接 LLM 时按此建表，勿在代码里假设表已存在。
+> `llm_call_log` 已实现（S1 T-207），字段以 `core/db.py` 为准；`tool_call_log` 将在 S2 T-303 接入。
 
 ```sql
 CREATE TABLE llm_call_log (

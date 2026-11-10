@@ -96,7 +96,8 @@ class Budget:
 # ---------------------------------------------------------------------------
 def plan(question: str, branch: str, fallback, role: str | None = None,
          budget: Budget | None = None, session_id: str | None = None,
-         provider=None, model: str | None = None, admission=None) -> dict:
+         provider=None, model: str | None = None, admission=None,
+         audit_db=None) -> dict:
     """返回一份计划。关闭时 = 规则版结果（逐位一致，这是 S0 的验收方式）。
 
     打开时两道闸：
@@ -125,7 +126,8 @@ def plan(question: str, branch: str, fallback, role: str | None = None,
         from llm.planner import PLAN_MODEL, PlanRejected, plan_llm
         res = plan_llm(question, role=role, budget=budget,
                        seed=_seed(session_id), provider=provider,
-                       model=model or MODEL or PLAN_MODEL)
+                       model=model or MODEL or PLAN_MODEL,
+                       audit_db=audit_db, session_id=session_id)
         adm.record(True)
         return res
     except (LLMUnavailable, PlanRejected) as e:

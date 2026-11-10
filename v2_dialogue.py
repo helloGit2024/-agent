@@ -58,6 +58,7 @@ from core.db import Database
 from core.policies import DEFAULT_CONFIG
 import llm
 import memory
+from llm.call import AuditDenied
 from scheduler import registry as sched
 from tools import compute_model_metric as model_tool
 from tools import registry as tool_registry
@@ -298,7 +299,8 @@ def validate_plan_v2(plan: dict) -> tuple[bool, list[str]]:
 class DialogEngine:
     # GraphBubbleUp 是 interrupt 的载体。吞掉它 = 澄清闸门静默消失，
     # 用户永远等不到提问，系统还"以为"自己跑完了。（V1 踩过一次，这里不能再踩）
-    PASSTHROUGH = (GraphBubbleUp,)
+    # 审计拒绝必须穿出编排，不能被普通节点异常处理转成降级回答。
+    PASSTHROUGH = (GraphBubbleUp, AuditDenied)
 
     def __init__(self, db: Database, verbose: bool = True,
                  role: str = access.DEFAULT_ROLE, admission=None):
@@ -381,7 +383,7 @@ class DialogEngine:
                            lambda: intent.parse(state["question"]),
                            role=state.get("role"),
                            session_id=state.get("session_id"),
-                           admission=adm)
+                           admission=adm, audit_db=self.db)
             plan_source = res.pop("source", "rules")
             # D2 是"发生过的事件"，必须留在 trace/findings 里，不许静默吞掉
             degrade = res.pop("degrade", None)

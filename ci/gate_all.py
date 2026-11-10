@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # (层级, 名字, 脚本, 期望关键句)
 GATES = [
     ("A 芯", "V1 内核自检 32 条", "selftest.py", "32 条断言全部满足"),
-    ("B 壳", "V2 自检 105 条", "selftest_v2.py", "105 条通过"),
+    ("B 壳", "V2 自检 109 条", "selftest_v2.py", "109 条通过"),
     ("B 壳", "语义层评估器 13–18", "eval/eval_semantic.py", "全部符合预期"),
     ("B 壳", "7 题演示回归", "eval/regress_demo.py", "无回归"),
     ("C 静", "唯一实现 / 契约封闭", "ci/check_imports.py", "两道门禁全绿"),

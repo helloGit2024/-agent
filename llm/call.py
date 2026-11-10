@@ -17,12 +17,13 @@
      网关自己**绝不**给替代答案（P-10）；
   ④ 预算可断：传入 Budget 时先查余量再调用，成功后 token 记入账本。
 
-llm_call_log 落库在 T-207 做；本模块先把 meta 备齐，落库时原样写入。
+llm_call_log 由本模块在成功/失败出口写入；审计不可用抛 AuditDenied，不能被 D2 吞掉。
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import time
 
 TEMPERATURE = 0                    # P-08：写死，不许成为参数
 DEFAULT_TIMEOUT_S = 10
@@ -40,6 +41,15 @@ class LLMUnavailable(Exception):
     def __init__(self, reason: str, detail: str = ""):
         super().__init__(f"LLM_UNAVAILABLE/{reason}" + (f": {detail}" if detail else ""))
         self.reason = reason
+
+
+class AuditDenied(Exception):
+    """审计不可用：这是业务拒绝，不是 LLM 规划失败，禁止回退成无审计回答。"""
+    code = "DENIED"
+    reason = "audit_failed"
+
+    def __init__(self):
+        super().__init__("DENIED: LLM 审计不可用")
 
 
 class ProviderError(Exception):
@@ -130,60 +140,94 @@ def _parse(text: str) -> tuple[object | None, str | None]:
 # ---------------------------------------------------------------------------
 # 唯一入口
 # ---------------------------------------------------------------------------
+def _write_audit(audit_db, session_id: str, meta: dict, usage: dict,
+                 output_hash: str, started: float, status: str,
+                 error_code: str | None = None) -> None:
+    """审计异常统一转 DENIED；DB 细节不进异常文案，也不在这里降级。"""
+    record = dict(meta, output_hash=output_hash)
+    latency_ms = max(0, round((time.perf_counter() - started) * 1000))
+    try:
+        audit_db.log_llm_call(session_id=session_id, meta=record, usage=usage,
+                              latency_ms=latency_ms, status=status,
+                              error_code=error_code)
+    except Exception as e:
+        raise AuditDenied() from e
+
+
 def call(purpose: str, prompt: str, schema: dict, *, model: str,
          budget=None, provider=None, seed: int | None = None,
          max_tokens: int = DEFAULT_MAX_TOKENS,
          timeout_s: int = DEFAULT_TIMEOUT_S,
-         prompt_version: str = "dev") -> dict:
+         prompt_version: str = "dev", audit_db=None,
+         session_id: str | None = None) -> dict:
     """调一次 LLM。返回 {data, usage, meta}；失败只抛 LLMUnavailable。
 
     provider 可注入（测试用假 provider）；生产默认 llm.providers.qwen。
     provider 协议：模块/对象带 NAME、SUPPORTS_SEED、chat(messages, **opts)。
+    audit_db + session_id 是必填审计上下文；审计写失败抛 AuditDenied/DENIED。
     """
     if not model:
         # 模型版本是审计字段，"用默认的"意味着审计里查不到这次到底用的谁
         raise LLMUnavailable("config", "model 必须显式传具体版本号（禁浮动别名）")
+    if audit_db is None or not session_id:
+        # 宁可拒绝，也不允许"先回答、后补审计"的不可追溯窗口。
+        raise AuditDenied()
     provider = provider or _default_provider()
-    if budget is not None and budget.exhausted():
-        raise LLMUnavailable("budget", "预算已耗尽，走 D2 降级而不是再试一次")
+    started = time.perf_counter()
+    meta = {
+        "purpose": purpose, "model": model, "temperature": TEMPERATURE,
+        "seed": seed if getattr(provider, "SUPPORTS_SEED", False) else None,
+        "prompt_version": prompt_version, "schema_hash": schema_hash(schema),
+        "max_tokens": max_tokens,
+        "provider": getattr(provider, "NAME", type(provider).__name__),
+    }
+    usage: dict = {}
+    output_hash = _sha("")              # 无响应时也有确定的非空审计值
 
-    messages = [{"role": "user", "content": prompt}]
-    seed_opt = seed if getattr(provider, "SUPPORTS_SEED", False) else None
-    last_bad: list[str] = []
+    try:
+        if budget is not None and budget.exhausted():
+            raise LLMUnavailable("budget", "预算已耗尽，走 D2 降级而不是再试一次")
 
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            resp = provider.chat(messages, model=model, temperature=TEMPERATURE,
-                                 seed=seed_opt, max_tokens=max_tokens,
-                                 timeout_s=timeout_s)
-        except ProviderTimeout as e:
-            raise LLMUnavailable("timeout", str(e)) from e
-        except ProviderHTTPError as e:
-            if e.retryable and attempt < MAX_ATTEMPTS:
-                continue
-            raise LLMUnavailable(f"http_{e.status}", str(e)) from e
-        except ProviderError as e:
-            raise LLMUnavailable("provider", str(e)) from e
+        messages = [{"role": "user", "content": prompt}]
+        last_bad: list[str] = []
 
-        data, err = _parse(resp.get("text") or "")
-        bad = [err] if err else _validate(data, schema)
-        if bad:
-            last_bad = bad
-            if attempt < MAX_ATTEMPTS:
-                continue
-            raise LLMUnavailable("schema", "; ".join(bad)[:300])
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                resp = provider.chat(messages, model=model, temperature=TEMPERATURE,
+                                     seed=meta["seed"], max_tokens=max_tokens,
+                                     timeout_s=timeout_s)
+            except ProviderTimeout as e:
+                raise LLMUnavailable("timeout", str(e)) from e
+            except ProviderHTTPError as e:
+                if e.retryable and attempt < MAX_ATTEMPTS:
+                    continue
+                raise LLMUnavailable(f"http_{e.status}", str(e)) from e
+            except ProviderError as e:
+                raise LLMUnavailable("provider", str(e)) from e
 
-        usage = resp.get("usage") or {}
-        if budget is not None:
-            budget.spend(tokens=int(usage.get("total_tokens", 0)))
-        return {"data": data, "usage": usage, "meta": {
-            "purpose": purpose, "model": model, "temperature": TEMPERATURE,
-            "seed": seed_opt, "prompt_version": prompt_version,
-            "schema_hash": schema_hash(schema), "max_tokens": max_tokens,
-            "attempts": attempt, "output_hash": _sha(resp["text"]),
-            "provider": getattr(provider, "NAME", type(provider).__name__),
-        }}
-    raise LLMUnavailable("schema", "; ".join(last_bad)[:300])  # 理论不可达，防御
+            usage = resp.get("usage") or {}
+            output_hash = _sha(resp.get("text") or "")
+            data, err = _parse(resp.get("text") or "")
+            bad = [err] if err else _validate(data, schema)
+            if bad:
+                last_bad = bad
+                if attempt < MAX_ATTEMPTS:
+                    continue
+                raise LLMUnavailable("schema", "; ".join(bad)[:300])
+
+            if budget is not None:
+                budget.spend(tokens=int(usage.get("total_tokens", 0)))
+            result_meta = dict(meta, attempts=attempt, output_hash=output_hash)
+            _write_audit(audit_db, session_id, meta, usage, output_hash,
+                         started, "ok")
+            return {"data": data, "usage": usage, "meta": result_meta}
+        raise LLMUnavailable("schema", "; ".join(last_bad)[:300])  # 理论不可达
+    except LLMUnavailable as e:
+        status = {"schema": "schema_fail", "timeout": "timeout",
+                  "budget": "budget_exhausted"}.get(e.reason, "denied")
+        _write_audit(audit_db, session_id, meta, usage, output_hash,
+                     started, status, e.reason)
+        raise
 
 
 def _default_provider():

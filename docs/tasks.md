@@ -32,7 +32,7 @@
 | T-204 ✅ | 闸门 ② 计划校验增强：跨册引用直接拒 | `v2_dialogue.validate_plan_v2`、`selftest_v2.py`（§19 +2 断言）、`ci/gate_all.py`（计数 95→97） | 造 `branch=model` + `compute_metric` → 拒绝且不改写 | T-202 | S |
 | T-205 ✅ | 闸门 ④ 预算/熔断 | `core/admission.py`（新建）、`llm/__init__.py`（plan/narrate 接 admission）、`v2_dialogue.DialogEngine`（持有 Admission 并在 ask() 入口查熔断）、`selftest_v2.py`（§20 +3 断言）、`ci/gate_all.py`（计数 97→100） | 9 次调用第 9 次被拒；连续 3 失败熔断 | T-203 | M |
 | T-206 ✅ | 准入闸门（token→角色→scope） | `core/admission.py`、`selftest_v2.py`（§21 +5 断言）、`ci/gate_all.py`（计数 100→105） | 无 token → `DENIED` 且文案不含「查不到」 | T-205 | M |
-| T-207 | `llm_call_log` 落库 + 审计失败即失败 | `core/db.py`、`llm/call.py` | 关审计写入 → 请求失败 | T-201 | S |
+| T-207 ✅ | `llm_call_log` 落库 + 审计失败即失败 | `core/db.py`、`llm/call.py`、`llm/__init__.py`、`llm/planner.py`、`v2_dialogue.py`、`selftest_v2.py`（§22 +4 断言）、`ci/gate_all.py`（计数 105→109）、`docs/data-model.md` | 关审计写入 → 请求失败 | T-201 | S |
 | T-208 | LLM 版 vs 规则版对照跑（先不评分） | `eval/compare_plans.py`（新建） | 输出 10 题两边计划差异表 | T-202 | S |
 
 **S1 出口**：`BTA_LLM=on` 10 题全通；`BTA_LLM=off` 回归基线逐字节不变；D2 可观测。

@@ -93,6 +93,28 @@ CREATE TABLE IF NOT EXISTS audit (
     hash      TEXT NOT NULL,
     PRIMARY KEY (run_id, seq)
 );
+
+-- LLM 统一出口审计（S1 T-207）。prompt/output 原文不落库，只留哈希。
+CREATE TABLE IF NOT EXISTS llm_call_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      TEXT NOT NULL,
+    purpose         TEXT NOT NULL,
+    provider        TEXT NOT NULL,
+    model           TEXT NOT NULL,
+    temperature     REAL NOT NULL DEFAULT 0,
+    seed            INTEGER,
+    prompt_version  TEXT NOT NULL,
+    schema_hash     TEXT NOT NULL,
+    max_tokens      INTEGER NOT NULL,
+    tokens_in       INTEGER,
+    tokens_out      INTEGER,
+    latency_ms      INTEGER NOT NULL,
+    output_hash     TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    error_code      TEXT,
+    ts              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_llm_sess ON llm_call_log(session_id, ts);
 """
 
 
@@ -163,6 +185,32 @@ class Database:
 
     def auditor(self, run_id: str) -> AuditChain:
         return AuditChain(self.conn, run_id)
+
+    def log_llm_call(self, *, session_id: str, meta: dict, usage: dict,
+                     latency_ms: int, status: str,
+                     error_code: str | None = None) -> int:
+        """写一次 LLM 网关调用；异常原样上抛，由统一出口转成 DENIED。
+
+        入参刻意没有 prompt/output 原文：调用方即使想写敏感原文也塞不进来。
+        """
+        sql = """INSERT INTO llm_call_log (
+            session_id, purpose, provider, model, temperature, seed,
+            prompt_version, schema_hash, max_tokens, tokens_in, tokens_out,
+            latency_ms, output_hash, status, error_code, ts
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+        values = (
+            session_id, meta["purpose"], meta["provider"], meta["model"],
+            meta["temperature"], meta.get("seed"), meta["prompt_version"],
+            meta["schema_hash"], meta["max_tokens"], usage.get("prompt_tokens"),
+            usage.get("completion_tokens"), latency_ms, meta["output_hash"],
+            status, error_code, time.strftime("%Y-%m-%dT%H:%M:%S"))
+        try:
+            cur = self.conn.execute(sql, values)
+            self.conn.commit()
+            return int(cur.lastrowid)
+        except Exception:
+            self.conn.rollback()
+            raise
 
     # ---------------- 申请主档 ----------------
     def add_applicants(self, rows: Iterable[dict]) -> None:

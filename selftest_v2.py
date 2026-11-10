@@ -584,7 +584,8 @@ def main() -> None:
     p1, b1 = _Fake([_good]), llm.Budget()
     r1 = llm_call.call("plan", "问：通过率", _schema,
                        model="qwen-plus-2025-12-01",
-                       budget=b1, provider=p1, seed=42)
+                       budget=b1, provider=p1, seed=42,
+                       audit_db=db, session_id="T201-1")
     check("统一出口正常返回：temperature=0 / seed / schema_hash 可审计，预算入账",
           r1["data"] == {"intent": "STATS"} and r1["meta"]["attempts"] == 1
           and r1["meta"]["temperature"] == 0 and r1["meta"]["seed"] == 42
@@ -594,7 +595,8 @@ def main() -> None:
 
     # ② 重试：第一次不合 schema，第二次合规 → 成功且恰好 2 次尝试
     p2 = _Fake([{"text": '{"foo": 1}', "usage": {"total_tokens": 3}}, _good])
-    r2 = llm_call.call("plan", "q", _schema, model="m-v1", provider=p2)
+    r2 = llm_call.call("plan", "q", _schema, model="m-v1", provider=p2,
+                       audit_db=db, session_id="T201-2")
     check("输出不合 schema → 重试 1 次后成功（attempts=2）",
           r2["data"] == {"intent": "STATS"} and r2["meta"]["attempts"] == 2
           and p2.calls == 2, str(r2.get("meta")))
@@ -602,7 +604,8 @@ def main() -> None:
     # ③ 超时：立即 LLMUnavailable/timeout，不重试（重试超时请求只会放大雪崩）
     p3 = _Fake([llm_call.ProviderTimeout("read timeout"), _good])
     try:
-        llm_call.call("plan", "q", _schema, model="m-v1", provider=p3)
+        llm_call.call("plan", "q", _schema, model="m-v1", provider=p3,
+                      audit_db=db, session_id="T201-3")
         t3 = False
     except llm_call.LLMUnavailable as e:
         t3 = e.reason == "timeout" and p3.calls == 1
@@ -612,7 +615,8 @@ def main() -> None:
     p4 = _Fake([{"text": '{"foo": 1}', "usage": {}},
                 {"text": '{"bar": 2}', "usage": {}}])
     try:
-        llm_call.call("plan", "q", _schema, model="m-v1", provider=p4)
+        llm_call.call("plan", "q", _schema, model="m-v1", provider=p4,
+                      audit_db=db, session_id="T201-4")
         t4 = False
     except llm_call.LLMUnavailable as e:
         t4 = e.reason == "schema" and p4.calls == 2
@@ -637,7 +641,8 @@ def main() -> None:
     q1 = "现金贷近三个月的 PSI 有没有漂移"
     p5 = _Fake([_plan_json(intent="MODEL_DIAG", window_text="近三个月",
                            metrics=[], model_metric="psi", dimension="overall")])
-    r5 = llm_plan.plan_llm(q1, provider=p5, model="m-v1", seed=7)
+    r5 = llm_plan.plan_llm(q1, provider=p5, model="m-v1", seed=7,
+                           audit_db=db, session_id="T202-1")
     rl5 = intent.parse(q1)
     check("MODEL_DIAG 归一化：intent/product/窗口起止/label 与规则版一致，"
           "PSI 自动带基准期声明",
@@ -653,7 +658,8 @@ def main() -> None:
     # ② 正向（统计类）：scope 与规则版一致；LLM 没给指标 → 走同一套默认口径
     q2 = "现金贷近一个月 FPD7 是多少？"
     p6 = _Fake([_plan_json(metrics=["fpd7_rate"])])
-    r6 = llm_plan.plan_llm(q2, provider=p6, model="m-v1")
+    r6 = llm_plan.plan_llm(q2, provider=p6, model="m-v1",
+                           audit_db=db, session_id="T202-2")
     rl6 = intent.parse(q2)
     check("STATS 归一化：intent/scope 与规则版一致，指标 id 只认册子注册值",
           r6["intent"] == rl6["intent"] == "STATS"
@@ -666,7 +672,8 @@ def main() -> None:
     # ③ 反向：跨册引用（STATS + model_metric=ks）→ PlanRejected，不归一化不执行
     p7 = _Fake([_plan_json(model_metric="ks")])
     try:
-        llm_plan.plan_llm("现金贷近一个月通过率", provider=p7, model="m-v1")
+        llm_plan.plan_llm("现金贷近一个月通过率", provider=p7, model="m-v1",
+                          audit_db=db, session_id="T202-3")
         t7 = False
     except llm_plan.PlanRejected as e:
         t7 = any("compute_model_metric" in b for b in e.bad)
@@ -676,7 +683,8 @@ def main() -> None:
     p8 = _Fake([_plan_json(metrics=["approval_rate_v2"]),
                 _plan_json(metrics=["approval_rate_v2"])])
     try:
-        llm_plan.plan_llm("现金贷近一个月通过率", provider=p8, model="m-v1")
+        llm_plan.plan_llm("现金贷近一个月通过率", provider=p8, model="m-v1",
+                          audit_db=db, session_id="T202-4")
         t8 = False
     except llm_call.LLMUnavailable as e:
         t8 = e.reason == "schema" and p8.calls == 2
@@ -699,7 +707,7 @@ def main() -> None:
                           metrics=[], model_metric="ks", dimension="overall")
         # ② 开关打开且 LLM 可用：计划来自 LLM，intent/scope 仍与规则版一致
         r9 = llm.plan(q3, "auto", lambda: intent.parse(q3),
-                      session_id="S-1", provider=_Fake([good]))
+                      session_id="S-1", provider=_Fake([good]), audit_db=db)
         check("开关打开：LLM 计划生效（source=llm），intent/scope 与规则版一致",
               r9["source"] == "llm" and r9["intent"] == intent.parse(q3)["intent"]
               and r9["slots"]["model_metric"] == "ks"
@@ -708,7 +716,8 @@ def main() -> None:
 
         # ③ 反向：LLM 超时 → D2 回退规则版，不抛异常，降级标记可观测
         r10 = llm.plan(q3, "auto", lambda: intent.parse(q3), session_id="S-1",
-                       provider=_Fake([llm_call.ProviderTimeout("read timeout")]))
+                       provider=_Fake([llm_call.ProviderTimeout("read timeout")]),
+                       audit_db=db)
         check("LLM 超时 → D2 回退规则版（不抛异常，degrade 标记可观测）",
               r10["source"] == "rules" and r10.get("degrade") == "D2"
               and r10.get("degraded_reason") == "timeout"
@@ -761,12 +770,12 @@ def main() -> None:
         for i in range(8):
             r = llm.plan(q_budget, "auto", lambda: intent.parse(q_budget),
                          session_id=f"B-{i}", provider=fake_provider,
-                         admission=adm20a)
+                         admission=adm20a, audit_db=db)
             if r.get("source") == "llm":
                 ok_calls += 1
         r9 = llm.plan(q_budget, "auto", lambda: intent.parse(q_budget),
                       session_id="B-9", provider=fake_provider,
-                      admission=adm20a)
+                      admission=adm20a, audit_db=db)
         check("预算耗尽：前 8 次正常返回 LLM 计划，第 9 次 degrade=D2 且回退规则版",
               ok_calls == 8 and r9.get("degrade") == "D2"
               and r9.get("degraded_reason") == "budget"
@@ -783,7 +792,8 @@ def main() -> None:
         for i in range(3):
             try:
                 llm.plan(q_budget, "auto", lambda: intent.parse(q_budget),
-                         session_id=f"F-{i}", provider=bad_p, admission=adm20b)
+                         session_id=f"F-{i}", provider=bad_p, admission=adm20b,
+                         audit_db=db)
             except Exception:                                 # noqa: BLE001
                 pass
         check("连续 3 次 LLM 失败 → admission.circuit_open=True（熔断触发）",
@@ -850,6 +860,71 @@ def main() -> None:
     unknown21 = adm21.authorize("selftest-unknown-role")
     check("token 映射到未知角色 → fail-closed，不退回默认角色",
           unknown21 == denied21, str(unknown21))
+
+    # ---------------------------------------------------------------
+    print("\n[22] LLM 调用审计：成功/失败全量落库，审计失败即业务失败（S1 T-207）")
+    raw_prompt22 = "这个 prompt 只能哈希，绝不进审计原文"
+    raw_output22 = '{"intent": "STATS"}'
+    ok_usage22 = {"total_tokens": 9, "prompt_tokens": 5, "completion_tokens": 4}
+    llm_call.call("plan", raw_prompt22, _schema, model="m-v1", seed=11,
+                  provider=_Fake([{"text": raw_output22, "usage": ok_usage22}]),
+                  prompt_version="audit-test-v1", audit_db=db,
+                  session_id="T207-OK")
+    row22 = dict(db.conn.execute(
+        "SELECT * FROM llm_call_log WHERE session_id='T207-OK'").fetchone())
+    check("成功调用落库：模型/版本/seed/tokens/latency/hash 齐全，原文不落库",
+          row22["status"] == "ok" and row22["model"] == "m-v1"
+          and row22["prompt_version"] == "audit-test-v1" and row22["seed"] == 11
+          and row22["tokens_in"] == 5 and row22["tokens_out"] == 4
+          and isinstance(row22["latency_ms"], int) and len(row22["output_hash"]) == 64
+          and raw_prompt22 not in str(row22) and raw_output22 not in str(row22),
+          str(row22))
+
+    timeout_provider22 = _Fake([llm_call.ProviderTimeout("audit timeout")])
+    try:
+        llm_call.call("plan", "q", _schema, model="m-v1",
+                      provider=timeout_provider22, audit_db=db,
+                      session_id="T207-TIMEOUT")
+    except llm_call.LLMUnavailable:
+        pass
+    fail_row22 = dict(db.conn.execute(
+        "SELECT * FROM llm_call_log WHERE session_id='T207-TIMEOUT'").fetchone())
+    check("失败调用也落库：status=timeout + error_code，不留无审计失败",
+          fail_row22["status"] == "timeout"
+          and fail_row22["error_code"] == "timeout"
+          and len(fail_row22["output_hash"]) == 64, str(fail_row22))
+
+    no_audit_provider22 = _Fake([_good])
+    try:
+        llm_call.call("plan", "q", _schema, model="m-v1",
+                      provider=no_audit_provider22)
+        no_audit_denied22 = False
+    except llm_call.AuditDenied as e:
+        no_audit_denied22 = e.code == "DENIED"
+    check("缺审计上下文 → 调 provider 前 DENIED，不产生无审计外部调用",
+          no_audit_denied22 and no_audit_provider22.calls == 0)
+
+    broken_db22 = Database(":memory:")
+    broken_db22.conn.execute("DROP TABLE llm_call_log")  # 人为关闭审计写入
+    broken_eng22 = DialogEngine(broken_db22)
+    broken_graph22 = broken_eng22.build().compile(checkpointer=InMemorySaver())
+    old_enabled, old_model = llm.enabled(), llm.MODEL
+    old_provider22 = llm_call._default_provider
+    e2e_denied22 = False
+    llm.set_enabled(True, model="m-v1")
+    llm_call._default_provider = lambda: _Fake([_plan_json()])
+    try:
+        with adm_mod._Singleton(adm_mod.Admission()):
+            ask(broken_eng22, broken_graph22, q3, sid="T207-BROKEN")
+    except llm_call.AuditDenied as e:
+        e2e_denied22 = e.code == "DENIED"
+    finally:
+        llm.set_enabled(old_enabled)
+        llm.MODEL = old_model
+        llm_call._default_provider = old_provider22
+        broken_db22.close()
+    check("关审计写入 → 整个提问抛 DENIED，不被 D2 回退成正常答案",
+          e2e_denied22)
 
     db.close()
     print("\n" + "═" * 78)
