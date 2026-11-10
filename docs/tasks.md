@@ -37,6 +37,8 @@
 
 **S1 出口**：`BTA_LLM=on` 10 题全通；`BTA_LLM=off` 回归基线逐字节不变；D2 可观测。
 
+> 已验收（2026-11-10）：`BTA_LLM=on` 10 题全部有答案、信封 4 行齐全、`verify_numbers` 全过；按请求独立预算时 10/10 走 LLM 计划。同一进程连跑 10 题时第 9、10 题因全局 `max_calls=8`（T-205 FR-502）降级 D2 并在 trace 标记 `degrade_reason=budget` —— 这是设计行为，不是 LLM 失败（`llm_call_log` 8 条均为 `ok`）。
+
 ## 阶段 S1.5 · 语义层对标调研（与 S1 并行，S2 软门槛）
 
 > 详见 `docs/research-semantic-layer.md`。调研产出**只进文档**（`docs/research/`、`docs/adr/`），
