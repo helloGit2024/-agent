@@ -301,12 +301,15 @@ class DialogEngine:
     PASSTHROUGH = (GraphBubbleUp,)
 
     def __init__(self, db: Database, verbose: bool = True,
-                 role: str = access.DEFAULT_ROLE):
+                 role: str = access.DEFAULT_ROLE, admission=None):
         self.db = db
         self.verbose = verbose                         # 是否打印过程 trace
         self.clarify_log: list[dict] = []              # 澄清记录（评估用）
         # 角色：Harness 只认"你是谁"，语义层认"你能做什么"（§7.6 分工）
         self.role = role
+        # 闸门 ④：全局预算 + 熔断（T-205）。默认共享单例，测试可注入隔离
+        from core import admission as adm_mod
+        self.admission = admission or adm_mod.default()
         # 记忆层（S0 只做接口）：短期会话。默认进程内，重启即失效。
         # 刻意**不**读它来改口径：记忆只允许填默认槽位（memory/__init__.py 硬规则）。
         self.memory = memory.ShortTerm()
@@ -372,10 +375,13 @@ class DialogEngine:
         if state.get("parsed"):
             parsed, plan_source = state["parsed"], "state"
         else:
+            from core import admission as adm_mod
+            adm = adm_mod.default()
             res = llm.plan(state["question"], "auto",
                            lambda: intent.parse(state["question"]),
                            role=state.get("role"),
-                           session_id=state.get("session_id"))
+                           session_id=state.get("session_id"),
+                           admission=adm)
             plan_source = res.pop("source", "rules")
             # D2 是"发生过的事件"，必须留在 trace/findings 里，不许静默吞掉
             degrade = res.pop("degrade", None)
@@ -1310,6 +1316,24 @@ def ask(engine: DialogEngine, graph, question: str, sid: str | None = None,
     if verbose is None:
         verbose = VERBOSE
     sid = sid or f"Q-{int(time.time() * 1000) % 100000}"
+
+    # 闸门 ④：熔断 → 跳过整个编排，直接 D4（已转人工，工单号 xxx）
+    adm = getattr(engine, "admission", None)
+    if adm is None:
+        from core import admission as adm_mod
+        adm = adm_mod.default()
+    if adm.circuit_open:
+        trace = ["[ask] 🔴 熔断：连续 3 次 LLM 调用失败，已转人工"]
+        answer = ("当前智能解析服务连续 3 次调用失败，已自动熔断；"
+                  "您的问题【{q}】已转人工处理，工单号：T-{sid}。"
+                  "系统恢复后会自动通知您。".format(q=question, sid=sid))
+        return {"session_id": sid, "question": question,
+                "trace": trace, "findings": {"degrade": "D4",
+                                              "degraded_reason": adm.last_reason or "circuit"},
+                "answer": answer, "parsed": {"intent": "UNKNOWN", "slots": {},
+                                              "missing": ["branch", "intent"],
+                                              "notes": ["熔断降级（D4）"]}}
+
     cfg = {"configurable": {"thread_id": sid}}
     out = graph.invoke({"session_id": sid, "question": question,
                         "role": getattr(engine, "role", access.DEFAULT_ROLE),

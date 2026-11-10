@@ -743,6 +743,74 @@ def main() -> None:
           and json.dumps(bad_plan, sort_keys=True, ensure_ascii=False) == before,
           f"{errs20}")
 
+    # ---------------------------------------------------------------
+    print("\n[20] 闸门 ④：预算耗尽 → D2 / 连续 3 次失败 → 熔断 D4（S1 T-205）")
+    from core import admission as adm_mod
+
+    old_enabled, old_model = llm.enabled(), llm.MODEL
+    q_budget = "现金贷近三个月的 KS 是多少"
+
+    # ① 预算耗尽：Admission(max_calls=8)，前 8 次正常调 LLM，第 9 次 degrade=D2
+    adm20a = adm_mod.Admission(max_calls=8)
+    good_json = _plan_json(intent="MODEL_DIAG", window_text="近三个月",
+                           metrics=[], model_metric="ks", dimension="overall")
+    fake_provider = _Fake([good_json] * 8)           # 8 次都有响应
+    llm.set_enabled(True, model="m-v1")
+    try:
+        ok_calls = 0
+        for i in range(8):
+            r = llm.plan(q_budget, "auto", lambda: intent.parse(q_budget),
+                         session_id=f"B-{i}", provider=fake_provider,
+                         admission=adm20a)
+            if r.get("source") == "llm":
+                ok_calls += 1
+        r9 = llm.plan(q_budget, "auto", lambda: intent.parse(q_budget),
+                      session_id="B-9", provider=fake_provider,
+                      admission=adm20a)
+        check("预算耗尽：前 8 次正常返回 LLM 计划，第 9 次 degrade=D2 且回退规则版",
+              ok_calls == 8 and r9.get("degrade") == "D2"
+              and r9.get("degraded_reason") == "budget"
+              and r9["intent"] == intent.parse(q_budget)["intent"],
+              f"ok_calls={ok_calls} last={r9}")
+    finally:
+        llm.set_enabled(old_enabled); llm.MODEL = old_model
+
+    # ② 熔断：连续 3 次 LLM 调用失败 → circuit_open=True
+    adm20b = adm_mod.Admission(consecutive_fail_limit=3)
+    llm.set_enabled(True, model="m-v1")
+    try:
+        bad_p = _Fake([llm_call.ProviderTimeout("no network")] * 3)
+        for i in range(3):
+            try:
+                llm.plan(q_budget, "auto", lambda: intent.parse(q_budget),
+                         session_id=f"F-{i}", provider=bad_p, admission=adm20b)
+            except Exception:                                 # noqa: BLE001
+                pass
+        check("连续 3 次 LLM 失败 → admission.circuit_open=True（熔断触发）",
+              adm20b.circuit_open and adm20b.consecutive_failures == 3
+              and adm20b.last_reason == "circuit",
+              f"open={adm20b.circuit_open} nfail={adm20b.consecutive_failures}")
+
+        # ask() 入口拦截熔断 → 直接 D4 模板
+        adm_singleton_ctx = adm_mod._Singleton(adm20b)
+        adm_singleton_ctx.__enter__()
+        try:
+            db20 = prepare(Path("artifacts/t205.db"), n_population=500)
+            eng20 = DialogEngine(db20, admission=adm20b)
+            g20 = eng20.build().compile(checkpointer=InMemorySaver())
+            out20 = ask(eng20, g20, q_budget, sid="CIRCUIT-1")
+            check("熔断时 ask() 入口直接返回 D4 模板，跳过整个编排",
+                  out20["findings"].get("degrade") == "D4"
+                  and out20["findings"].get("degraded_reason") == "circuit"
+                  and "已转人工" in out20["answer"]
+                  and any("熔断" in t for t in out20["trace"]),
+                  f"d4={out20['findings']} answer_head={out20['answer'][:30]}")
+            db20.close()
+        finally:
+            adm_singleton_ctx.__exit__(None, None, None)
+    finally:
+        llm.set_enabled(old_enabled); llm.MODEL = old_model
+
     db.close()
     print("\n" + "═" * 78)
     print(f"自检结果：{PASS} 条通过 / {FAIL} 条失败")

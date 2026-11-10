@@ -96,30 +96,47 @@ class Budget:
 # ---------------------------------------------------------------------------
 def plan(question: str, branch: str, fallback, role: str | None = None,
          budget: Budget | None = None, session_id: str | None = None,
-         provider=None, model: str | None = None) -> dict:
+         provider=None, model: str | None = None, admission=None) -> dict:
     """返回一份计划。关闭时 = 规则版结果（逐位一致，这是 S0 的验收方式）。
 
-    fallback 必须是**无参可调用**，且内部就是规则版 intent.parse + 计划生成。
-    这样"关闭 LLM"不产生任何额外分支：走的是同一条路。
-
-    打开时：LLM 规划失败（超时 / schema 两次不合规 / 跨册引用）一律 D2 ——
-    **回退规则版并打标记**，不抛异常、不给替代计划。降级是编排层能看见的
-    一次事件（degrade="D2" + degraded_reason），不是一次静默重试。
+    打开时两道闸：
+      · admission.acquire() 先查全局预算/熔断。熔断 → D4（ask() 入口拦截），
+        预算耗尽 → D2（plan() 内回退规则版）。
+      · 真正调 LLM 的失败（LLMUnavailable/PlanRejected）→ record("fail")，
+        累积到 3 次触发熔断。成功 → record("ok")。
     """
+    from core import admission as adm_mod
+    adm = admission or adm_mod.default()
+
     budget = budget or Budget()
     if not _ENABLED:
         out = dict(fallback())
         out.setdefault("source", "rules")
         return out
+    if not adm.acquire():
+        # 熔断由 ask() 入口 D4 拦截；这里拦截 = ask() 未先查熔断
+        if adm.circuit_open:
+            raise _CircuitOpen()
+        return _d2(fallback, adm.last_reason or "budget")
     if budget.exhausted():
+        # 预算耗尽但已过 admission.acquire() → 没有真正调用 LLM，不计入失败链
         return _d2(fallback, "budget")
     try:
         from llm.planner import PLAN_MODEL, PlanRejected, plan_llm
-        return plan_llm(question, role=role, budget=budget,
-                        seed=_seed(session_id), provider=provider,
-                        model=model or MODEL or PLAN_MODEL)
+        res = plan_llm(question, role=role, budget=budget,
+                       seed=_seed(session_id), provider=provider,
+                       model=model or MODEL or PLAN_MODEL)
+        adm.record(True)
+        return res
     except (LLMUnavailable, PlanRejected) as e:
+        adm.record(False, getattr(e, "reason", None) or "plan_rejected")
+        if adm.circuit_open:
+            raise _CircuitOpen() from e
         return _d2(fallback, getattr(e, "reason", None) or "plan_rejected")
+
+
+class _CircuitOpen(Exception):
+    """熔断信号：ask() 入口应拦截，返回 degrade=D4 的模板回答。"""
 
 
 def _seed(session_id: str | None) -> int | None:
