@@ -582,7 +582,7 @@ def main() -> None:
     # ① 正常：结构 {data,usage,meta}，审计字段齐，预算记账
     p1, b1 = _Fake([_good]), llm.Budget()
     r1 = llm_call.call("plan", "问：通过率", _schema,
-                       model="qwen3-30b-a3b-instruct-2507",
+                       model="qwen-plus-2025-12-01",
                        budget=b1, provider=p1, seed=42)
     check("统一出口正常返回：temperature=0 / seed / schema_hash 可审计，预算入账",
           r1["data"] == {"intent": "STATS"} and r1["meta"]["attempts"] == 1
@@ -616,6 +616,70 @@ def main() -> None:
     except llm_call.LLMUnavailable as e:
         t4 = e.reason == "schema" and p4.calls == 2
     check("两次都不合 schema → LLMUnavailable/schema（重试额度恰好 1 次）", t4)
+
+    # ---------------------------------------------------------------
+    print("\n[17] LLM 规划：prompt→plan→validate_plan（S1 T-202）")
+    import llm.plan as llm_plan      # 注意：from llm import plan 会拿到 __init__ 里的同名函数
+
+    def _plan_json(**kw):
+        base = {"intent": "STATS", "product": "P_CASH_001",
+                "window_text": "近一个月", "metrics": ["approval_rate"],
+                "model_metric": None, "bins": None, "label": None,
+                "dimension": None, "field": None, "missing": [], "notes": []}
+        base.update(kw)
+        import json as _json
+        return {"text": _json.dumps(base, ensure_ascii=False),
+                "usage": {"total_tokens": 50}}
+
+    # ① 正向（模型级）：MODEL_DIAG 归一化 = 与规则版同形同口径
+    #    （窗口短语→Window 对象、默认 bins/label、ref_period 声明、审计 meta）
+    q1 = "现金贷近三个月的 PSI 有没有漂移"
+    p5 = _Fake([_plan_json(intent="MODEL_DIAG", window_text="近三个月",
+                           metrics=[], model_metric="psi", dimension="overall")])
+    r5 = llm_plan.plan_llm(q1, provider=p5, model="m-v1", seed=7)
+    rl5 = intent.parse(q1)
+    check("MODEL_DIAG 归一化：intent/product/窗口起止/label 与规则版一致，"
+          "PSI 自动带基准期声明",
+          r5["intent"] == rl5["intent"] == "MODEL_DIAG"
+          and r5["slots"]["product"] == rl5["slots"]["product"] == "P_CASH_001"
+          and r5["slots"]["window"].as_dict() == rl5["slots"]["window"].as_dict()
+          and r5["slots"]["label"] == rl5["slots"]["label"] == "fpd30"
+          and r5["slots"]["ref_period"] == "train_2025Q4"
+          and any("基准期" in n for n in r5["notes"])
+          and r5["source"] == "llm" and r5["plan_meta"]["seed"] == 7,
+          f"llm={r5['slots']} rules={rl5['slots']}")
+
+    # ② 正向（统计类）：scope 与规则版一致；LLM 没给指标 → 走同一套默认口径
+    q2 = "现金贷近一个月 FPD7 是多少？"
+    p6 = _Fake([_plan_json(metrics=["fpd7_rate"])])
+    r6 = llm_plan.plan_llm(q2, provider=p6, model="m-v1")
+    rl6 = intent.parse(q2)
+    check("STATS 归一化：intent/scope 与规则版一致，指标 id 只认册子注册值",
+          r6["intent"] == rl6["intent"] == "STATS"
+          and r6["slots"]["metrics"] == rl6["slots"]["metrics"]
+          == ["fpd7_rate", "stage_rates"]
+          and r6["slots"]["window"].as_dict() == rl6["slots"]["window"].as_dict()
+          and r6["missing"] == rl6["missing"] == [],
+          f"llm={r6['slots']} rules={rl6['slots']}")
+
+    # ③ 反向：跨册引用（STATS + model_metric=ks）→ PlanRejected，不归一化不执行
+    p7 = _Fake([_plan_json(model_metric="ks")])
+    try:
+        llm_plan.plan_llm("现金贷近一个月通过率", provider=p7, model="m-v1")
+        t7 = False
+    except llm_plan.PlanRejected as e:
+        t7 = any("compute_model_metric" in b for b in e.bad)
+    check("跨册引用 → PlanRejected（两册互斥由 validate_plan 把守）", t7)
+
+    # ④ 反向：编造册子里没有的指标 id → schema enum 拦截，重试仍编 → 不可用
+    p8 = _Fake([_plan_json(metrics=["approval_rate_v2"]),
+                _plan_json(metrics=["approval_rate_v2"])])
+    try:
+        llm_plan.plan_llm("现金贷近一个月通过率", provider=p8, model="m-v1")
+        t8 = False
+    except llm_call.LLMUnavailable as e:
+        t8 = e.reason == "schema" and p8.calls == 2
+    check("编造指标 id → schema enum 拦截（LLMUnavailable/schema）", t8)
 
     db.close()
     print("\n" + "═" * 78)
