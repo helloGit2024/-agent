@@ -235,6 +235,11 @@ VALID_STEPS_V2 = {"understand", "clarify", "consistency_gate", "semantic_compute
                   "config_lookup", "field_lookup", "narrate"}
 VALID_SCOPES = {"product", "channel", "new_vs_old"}
 
+# 两本册子的步骤与工具名：跨册引用 = 计划里同时出现两个册子的取数路径
+SEMANTIC_STEPS_V2 = {"consistency_gate", "semantic_compute",
+                     "anomaly_attribute", "policy_rank"}
+MODEL_STEPS_V2 = {"model_compute"}
+
 
 def validate_plan_v2(plan: dict) -> tuple[bool, list[str]]:
     """LLM 计划（或规则计划）的唯一入口闸门。
@@ -242,6 +247,11 @@ def validate_plan_v2(plan: dict) -> tuple[bool, list[str]]:
     ★与 V1 的区别：V1 校验"步骤"，V2 还要校验"指标必须注册过"。
       这一条让"口径封闭"从口头约定变成结构约束 ——
       LLM 编不出一个叫"综合健康度通过率"的指标，因为语义层里没有。
+
+    ★T-204：跨册引用**直接拒**，且**不改写**。模型级分支（intent=MODEL_DIAG
+      或 branch=model）只许出现 model_compute；其余分支只许出现策略步骤。
+      改写（"我把 compute_metric 删掉继续跑"）比拒绝更危险：它把一次
+      越权尝试变成一次"看起来成功"的回答，审计里再也看不见。
     """
     errs: list[str] = []
     if not isinstance(plan, dict):
@@ -255,6 +265,28 @@ def validate_plan_v2(plan: dict) -> tuple[bool, list[str]]:
     for sc in plan.get("scope", {}).get("dimensions", []):
         if sc not in VALID_SCOPES:
             errs.append(f"非法下钻维度: {sc}")
+
+    steps = set(plan.get("steps") or [])
+    tools = {c.get("tool") for c in plan.get("tool_calls") or []
+             if isinstance(c, dict)}
+    branch_model = (plan.get("intent") == intent.INTENT_MODEL_DIAG
+                    or plan.get("branch") == "model")
+    if branch_model:
+        crossed = sorted(steps & SEMANTIC_STEPS_V2)
+        if crossed:
+            errs.append(f"跨册引用：模型分支出现策略步骤 {crossed}")
+        if plan.get("metrics"):
+            errs.append(f"跨册引用：模型分支不许带策略指标 {plan['metrics']}")
+        if "compute_metric" in tools:
+            errs.append("跨册引用：模型分支出现 compute_metric（两册互斥）")
+    else:
+        if steps & MODEL_STEPS_V2:
+            errs.append("跨册引用：非模型分支出现 model_compute")
+        if "compute_model_metric" in tools:
+            errs.append("跨册引用：非模型分支出现 compute_model_metric")
+        if plan.get("model_metric"):
+            errs.append(f"跨册引用：非模型分支不许带模型指标 {plan['model_metric']}")
+
     if not plan.get("steps"):
         errs.append("steps 不能为空")
     return (not errs), errs

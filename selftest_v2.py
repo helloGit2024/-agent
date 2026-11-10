@@ -18,6 +18,7 @@ V1 的自检守的是"数学正确"；V2 多守三件更隐蔽的东西：
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -33,7 +34,7 @@ from core.db import Database
 from scheduler import registry as sched
 from tools import compute_model_metric as model_tool
 from v2_dialogue import (CFG_CUR, RUN_CUR, DialogEngine, ask,
-                         set_verbosity, prepare)
+                         set_verbosity, prepare, validate_plan_v2)
 
 ART = Path("artifacts")
 PASS = 0
@@ -716,6 +717,31 @@ def main() -> None:
     finally:
         llm.set_enabled(old_enabled)
         llm.MODEL = old_model
+
+    # ---------------------------------------------------------------
+    print("\n[19] 闸门 ②：跨册引用直接拒且不改写（S1 T-204）")
+    good_plan = {"question": "KS", "intent": "MODEL_DIAG",
+                 "steps": ["understand", "model_compute", "narrate"],
+                 "metrics": [],
+                 "scope": {"product": "P_CASH_001", "window": None,
+                           "dimensions": ["product"]}}
+    ok19, errs19 = validate_plan_v2(good_plan)
+    check("模型分支只走 model_compute → 通过（闸门不误杀）",
+          ok19 and errs19 == [], str(errs19))
+
+    bad_plan = {"question": "KS", "branch": "model",
+                "intent": "MODEL_DIAG",
+                "steps": ["understand", "model_compute", "semantic_compute", "narrate"],
+                "metrics": ["approval_rate"],
+                "tool_calls": [{"tool": "compute_metric",
+                                "args": {"metric_id": "approval_rate"}}],
+                "scope": {"dimensions": ["product"]}}
+    before = json.dumps(bad_plan, sort_keys=True, ensure_ascii=False)
+    ok20, errs20 = validate_plan_v2(bad_plan)
+    check("模型分支带 compute_metric/策略指标 → 拒绝且计划原样返回（不改写）",
+          not ok20 and sum("跨册引用" in e for e in errs20) == 3
+          and json.dumps(bad_plan, sort_keys=True, ensure_ascii=False) == before,
+          f"{errs20}")
 
     db.close()
     print("\n" + "═" * 78)
