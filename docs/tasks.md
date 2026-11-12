@@ -84,11 +84,12 @@
 
 ### 吸收项落地（R-004 产出，须在 S2 对外暴露前完成）
 
-> 编号按全表当前最大值 +1 分配（T-607 → T-608），不代表所属阶段；执行顺序以「依赖」列为准。
+> 编号按全表当前最大值 +1 分配（T-607 → T-608、T-609），不代表所属阶段；执行顺序以「依赖」列为准。
 
 | ID | 任务 | 落点 | 验收 | 依赖 | 规模 |
 |---|---|---|---|---|---|
 | T-608 | `NOT_REGISTERED` 能力清单按角色过滤 + 换成"能答的问法"：堵住用错误信息反查未授权指标 id 的枚举面（现状 `guard_call` 在判定角色前返回 `registered=sorted(CATALOG)`） | `core/catalog.py`（`guard_call` 的 `NOT_REGISTERED` 分支，L699—703）、`tools/registry.py`（`get_metric_definition` 同名分支，口径对齐）、`selftest_v2.py`（+2 断言）、`ci/gate_all.py`（计数更新）、`eval/fixtures/demo_v22_baseline.json`（仅按 P-11 重录时） | 正向：`risk_analyst` 问未注册口径 → 示例全部来自其可见指标，取 `MetricDef.typical_questions` 首条，缺省回退 `name`，不留空。反向：`business_viewer` 问未注册口径 → 响应（message / registered / suggestions）不出现 `fpd30_rate`、`mob3_bad_rate`、`loan_amount` 等未授权 id，且不出现任何指标数值。**边界**：错误码枚举、零数字、现有"这个口径还没有定义（不在册）"文案不变；越权仍走 `NOT_VISIBLE`，不得借"给示例"变相透露未授权指标。改文案/信封先跑 `make regress`，按 P-11 重录基线并写明原因与影响题号 | R-004；先于 T-301/T-305（MCP 对外暴露前） | S |
+| T-609 | `healthy_range` 进回答：册子已声明阈值但回答层从未使用，阈值散落在文档与人脑里，同一个数不同人解读不同。改为"数字 + 状态 + 阈值来源"三件套：① 阈值只认 `MetricDef.healthy_range`，渲染层不得写死任何数字；② 红/黄/绿（正常/关注/异常）状态由 `core` 按 `low/high/direction` 判定，LLM 只叙述、不得判定；③ 回答中数字、状态、阈值来源同时出现，缺一不可 | `core/envelope.py`（状态行 + 校验）、`v2_dialogue.py`（`_envelope` 取册子阈值；`verify_numbers`/叙述闸门丢弃模型自判状态词）、`core/catalog.py`（只读 `healthy_range`，不新增阈值常量）、`selftest_v2.py`（+2 断言）、`ci/gate_all.py`（计数更新）、`eval/fixtures/demo_v22_baseline.json`（仅按 P-11 重录时） | 正向：有阈值的指标（如 FPD7，`direction=lower_better`、`high=0.05`）答出状态，且"数字 + 状态 + 阈值来源（册子版本/direction/阈值）"同时出现。反向：未声明 `healthy_range` 的指标不出现任何颜色/状态；LLM 叙述里自带的"正常/异常/偏高"等状态词必须被闸门丢弃并回退模板。**边界**：`VINTAGE_BLOCKED`/`NOT_APPLICABLE` 不带颜色、不出状态，不许拿状态补空；越权仍零数字，状态不得变相透露未授权指标；未声明阈值给"不适用"，不许猜。涉文案/信封先跑 `make regress`，按 P-11 重录基线并写明原因与题号 | R-004；与 T-608 同批，先于 T-301/T-305（S2 前）；不阻塞 S1.5 出口 | S |
 
 ## 阶段 S2 · MCP server
 
