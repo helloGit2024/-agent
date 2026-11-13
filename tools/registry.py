@@ -59,6 +59,12 @@ def list_metrics(role: str | None = None) -> dict:
 
 def get_metric_definition(metric_id: str, role: str | None = None) -> dict:
     if metric_id in model_metrics.MODEL_CATALOG:
+        # ★T-608 扩展：命中但无权 → DENIED，未命中才 NOT_REGISTERED（两段式，
+        # 见 docs/research/wrenai-notes.md）。判定必须在返回字段之前 ——
+        # 否则无权角色既确认了"这个指标存在"，又拿走了 score_col。
+        pol = access.policy(role)
+        if not pol.check_metric(metric_id).get("ok"):
+            return err("DENIED", metric_id=metric_id, role=pol.role, kind="model")
         m = model_metrics.MODEL_CATALOG[metric_id]
         return {"ok": True, "kind": "model", "metric_id": metric_id,
                 "name": m.name, "score_col": m.score_col,
@@ -71,8 +77,9 @@ def get_metric_definition(metric_id: str, role: str | None = None) -> dict:
     if not chk.get("ok"):
         return chk
     if metric_id not in catalog.CATALOG:
+        # 与 guard_call 同一口径：先按角色过滤，再换成"能答的问法"。
         return err("NOT_REGISTERED", metric_id=metric_id,
-                   registered=sorted(catalog.CATALOG))
+                   registered=catalog.examples_for_role(role))
     return {"ok": True, "kind": "aggregate", **catalog.contract(metric_id)}
 
 

@@ -34,6 +34,7 @@ from core.db import Database
 from eval.compare_plans import diff_plans
 from scheduler import registry as sched
 from tools import compute_model_metric as model_tool
+from tools import registry as tool_registry
 from v2_dialogue import (CFG_CUR, RUN_CUR, DialogEngine, ask,
                          set_verbosity, prepare, validate_plan_v2)
 
@@ -305,6 +306,70 @@ def main() -> None:
           == "DENIED_DIMENSION")
     check("未知角色降级为最小权限（不是最大权限）",
           access.policy("some_new_role").metrics == ())
+    # ★ T-608：NOT_REGISTERED 的能力清单必须"先按角色过滤，再换成能答的问法"。
+    #   正向：全可见角色拿到非空问法，且两册入口（guard_call / 工具层）逐字一致
+    pos = catalog.guard_call("vif_mean", {"product": "P_CASH_001"},
+                             role="risk_analyst")
+    visible = [m for m in catalog.CATALOG.values()
+               if access.policy("risk_analyst").check_metric(m.metric_id).get("ok")]
+    examples = {m.typical_questions[0] if m.typical_questions else m.name
+                for m in visible}
+    tool_pos = tool_registry.call(db, "get_metric_definition",
+                                  {"metric_id": "vif_mean"}, role="risk_analyst")
+    check("正向：risk_analyst 拿到能答的问法（非空 + 均来自可见册子 + 两入口一致）",
+          pos["code"] == "NOT_REGISTERED"
+          and pos["message"] == "这个口径还没有定义（不在册）"
+          and bool(pos["registered"]) and set(pos["registered"]) <= examples
+          and tool_pos.get("registered") == pos["registered"],
+          str(pos.get("registered")))
+    #   反向：受限角色不得从错误信息反查出未授权指标（P-03 零信息）
+    neg = catalog.guard_call("vif_mean", {"product": "P_CASH_001"},
+                             role="business_viewer")
+    payload = json.dumps(neg, ensure_ascii=False)
+    check("反向：business_viewer 的 NOT_REGISTERED 不出现未授权 id / 任何数值",
+          neg["code"] == "NOT_REGISTERED"
+          and not any(x in payload
+                      for x in ("fpd30_rate", "mob3_bad_rate", "loan_amount"))
+          and "%" not in payload and "value" not in payload,
+          payload)
+    # ★ T-608 扩展：模型册同源缺口（先判注册、后判角色）一并收口。
+    #   正向：全可见角色问未注册模型指标 → 拿到可见模型指标的 name，且带提示
+    model_examples = {m.name for m in model_metrics.MODEL_CATALOG.values()
+                      if access.policy("risk_analyst").check_metric(
+                          m.metric_id).get("ok")}
+    pos_m = model_tool.run(db, {"metric_id": "vif_mean",
+                                "params": {"product": "P_CASH_001"}},
+                           role="risk_analyst")
+    check("正向：risk_analyst 的模型册 NOT_REGISTERED 给可见清单 + 保留提示",
+          pos_m["code"] == "NOT_REGISTERED" and bool(pos_m.get("registered"))
+          and set(pos_m["registered"]) <= model_examples
+          and pos_m.get("hint"),
+          str(pos_m.get("registered")))
+    #   反向：受限角色不得从模型册错误信息里反查出整套模型指标
+    neg_m = model_tool.run(db, {"metric_id": "vif_mean",
+                                "params": {"product": "P_CASH_001"}},
+                           role="business_viewer")
+    payload_m = json.dumps(neg_m, ensure_ascii=False)
+    check("反向：business_viewer 的模型册 NOT_REGISTERED 为空清单、无模型指标名",
+          neg_m["code"] == "NOT_REGISTERED" and neg_m.get("registered") == []
+          and "hint" not in neg_m
+          and not any(x in payload_m for x in model_metrics.MODEL_CATALOG),
+          payload_m)
+    #   正向：有权角色查模型指标定义，字段完整（score_col 是可用的）
+    pos_def = tool_registry.call(db, "get_metric_definition",
+                                {"metric_id": "ks"}, role="risk_analyst")
+    check("正向：risk_analyst 查 ks 定义 → ok 且带 score_col",
+          pos_def.get("ok") is True and pos_def.get("kind") == "model"
+          and pos_def.get("score_col") == "model_score_v1", str(pos_def)[:120])
+    #   反向：命中但无权 → DENIED，且不返回任何字段定义（score_col 也不行）
+    neg_def = tool_registry.call(db, "get_metric_definition",
+                                 {"metric_id": "ks"}, role="business_viewer")
+    payload_d = json.dumps(neg_def, ensure_ascii=False)
+    check("反向：business_viewer 查 ks 定义 → DENIED 且零字段（无 score_col）",
+          neg_def["code"] == "DENIED"
+          and not any(k in neg_def
+                      for k in ("score_col", "name", "label_col", "description"))
+          and "model_score_v1" not in payload_d, payload_d)
     view_lim = catalog.build_view(db, RUN_CUR, win, None,
                                   row_filter=pol.row_filter_for({}))
     check("行权限在取数前生效（View 里只剩被允许的产品）",

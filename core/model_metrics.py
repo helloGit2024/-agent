@@ -414,9 +414,14 @@ def compute_model_metric(metric_id: str, params: dict | None = None,
     params = dict(params or {})
     m = MODEL_CATALOG.get(metric_id)
     if m is None:
-        return err("NOT_REGISTERED", metric_id=metric_id,
-                   registered=sorted(MODEL_CATALOG),
-                   hint="KS/AUC/Gini/IV/PSI/LIFT/WOE 之外的模型指标尚未定义")
+        # ★T-608 扩展：模型册同样先按角色过滤 —— 否则受限角色能从错误信息
+        # 反查出整套模型指标（P-03）。过滤与取名规则只实现一次，在 catalog。
+        examples = catalog.examples_for_role(role, MODEL_CATALOG)
+        detail = {"metric_id": metric_id, "registered": examples}
+        if examples:
+            # 一句提示也带目录：只有真的能看到模型指标的角色才配拿到它
+            detail["hint"] = "KS/AUC/Gini/IV/PSI/LIFT/WOE 之外的模型指标尚未定义"
+        return err("NOT_REGISTERED", **detail)
 
     # ---- ① guard ----
     pol = access.policy(role)

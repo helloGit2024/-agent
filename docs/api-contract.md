@@ -198,11 +198,14 @@
 | `NEED_CLARIFY` | 缺槽位或分流模糊 | 给 2—4 个选项，**不选默认** |
 | `PARAM_OUT_OF_DOMAIN` | 参数不在枚举内；缺 `metric_id` 也走这里（不抛 `KeyError`） | 给合法域 |
 | `NOT_VISIBLE` | 明细请求 | 说「明细不出域」+ 聚合替代 |
+| `DENIED` | 口径在册但当前角色无权（如模型指标定义） | 拒绝，**零字段、零数字**；与 `NOT_REGISTERED` 构成两段式判定 |
 | `DENIED_DIMENSION` | 维度越权 | 拒绝，**零数字** |
 | `ROW_FILTERED` | 行级过滤生效 | 在【过滤】行注明 |
 | `NO_JOIN_PATH` | 实体图无路径 | 说明哪两个实体不连通 |
 
-> 这 9 个是**语义层**错误（`core.codes.SEMANTIC_ERRORS`），`eval_semantic.py` 用它做合法性别校验，**不许往里加调度/运维类状态**。
+> 这 10 个是**语义层**错误（`core.codes.SEMANTIC_ERRORS`），`eval_semantic.py` 用它做合法性别校验，**不许往里加调度/运维类状态**。
+>
+> 两种越权的分工（不互换）：**指标数据越权 → `NOT_VISIBLE`**（口径对当前角色不存在，措辞不得暗示"系统里有但不给你"）；**模型册定义查询越权 → `DENIED`**（两段式：先在册命中、再按角色拒绝，零字段零数字）。
 
 **调度层状态码（不在上表，形状同 `{ok:false, code, ...}`）**
 

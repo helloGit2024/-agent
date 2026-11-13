@@ -680,6 +680,30 @@ def _norm_window(w) -> Window | None:
     return parse_window(str(w))
 
 
+def examples_for_role(role: str | None = None, defs=None) -> list[str]:
+    """`NOT_REGISTERED` 时回给调用方的"能答的问法"，而不是在册 id 全集。
+
+    为什么必须先按角色过滤：在册 id 全集本身就是一份能力目录。如果不管角色
+    就交出去，受限角色问一个不存在的口径，就能从错误信息里反查出
+    `fpd30_rate / mob3_bad_rate / loan_amount`，把"越权零数字"绕成
+    "越权零数字但泄露目录"（P-03）。
+    为什么用 typical_questions 首条而不是 name：问法是"可以这么问"，
+    不含 metric_id，不会再顺手把 id 漏一遍；没有典型问法的指标回退 name。
+    未知角色 → policy.metrics 为空元组 → 返回空列表，fail-closed 不硬凑。
+
+    `defs` 让模型册复用同一套过滤，不必在 model_metrics 里再写一份
+    （两本册子物理隔离，但"按角色过滤"这个规则只应该有一处实现）。
+    """
+    pol = access.policy(role)
+    out: list[str] = []
+    for m in (CATALOG if defs is None else defs).values():
+        if not pol.check_metric(m.metric_id).get("ok"):
+            continue
+        qs = getattr(m, "typical_questions", ())
+        out.append(qs[0] if qs else m.name)
+    return out
+
+
 def guard_call(metric_id: str, params: dict | None = None,
                role: str | None = None, as_of: str = AS_OF) -> dict:
     """闸门 ①.5：口径守卫。**不抛异常、不猜默认值**，只返回结构化错误码。
@@ -698,8 +722,9 @@ def guard_call(metric_id: str, params: dict | None = None,
     params = dict(params or {})
     m = CATALOG.get(metric_id)
     if m is None:
+        # ★T-608：清单按角色过滤后再给 —— 见 examples_for_role 的注释。
         return err("NOT_REGISTERED", metric_id=metric_id,
-                   registered=sorted(CATALOG))
+                   registered=examples_for_role(role))
     pol = access.policy(role)
     if m.access_policy and pol.role not in m.access_policy:
         return err("NOT_VISIBLE", metric_id=metric_id, role=pol.role)
