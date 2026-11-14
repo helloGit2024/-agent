@@ -247,6 +247,23 @@ def main() -> None:
           "【状态】" not in (out_tab.get("answer") or "")
           and gate["source"] == "template" and gate["reason"] == "model_state"
           and gate["text"] == "【模板】", str(gate))
+    # 反向：样本不足是"把握度"，绝不能改变或生成健康档位（T-609 决定 2）。
+    #   这里刻意造一个"分母不足但值落在 healthy_range 内"的语义场景：
+    #   只要有人把 sample_warning 接回 health_state / 状态行，下面四条就会断。
+    h_small = catalog.health_state("approval_rate", 0.70)   # 0.55~0.90 区间内
+    bad_kw = {}
+    try:
+        catalog.health_state("approval_rate", 0.70, sample_warning=True)
+    except TypeError as e:
+        bad_kw["err"] = str(e)
+    st_line = next((ln for ln in envelope.render(
+        {"metrics": ["approval_rate"], "health": [h_small]}).splitlines()
+        if ln.startswith("【状态】")), "")
+    check("反向：样本不足不改状态档（阈值内仍=正常，且样本提示不进状态行）",
+          catalog.HEALTH_STATES == ("正常", "异常")
+          and h_small["state"] == "正常"
+          and bool(bad_kw) and "样本" not in st_line and "正常" in st_line,
+          st_line)
 
     # ---------------------------------------------------------------
     print("\n[10] 听不懂与兜底：不许白屏，不许悄悄猜")
