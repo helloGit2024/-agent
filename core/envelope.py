@@ -13,6 +13,14 @@
   留空 = 拼字符串时漏了一行；不适用 = 有人认真判断过这个回答不该有窗口。
   把两种状态混同，闸门就退化成"长度检查"。
 
+可选行（T-609，不替代四要素）：
+  【状态】——仅当指标声明了 `healthy_range` 且能算出状态时出现，固定在第 1 行后；
+            值域只有「正常 / 异常」，阈值来源写成"册子 vX，direction，low/high"；
+            未声明阈值 / VINTAGE_BLOCKED / NOT_APPLICABLE 一律不出，不拿状态补空。
+  【分箱】——仅模型级指标（第 5 行），见 _extra。
+`validate(need_status=True)` 用于"有阈值的标量回答"强制校验状态行；
+`need_extra=True` 用于模型级回答强制校验【分箱】。
+
 ════════════════════════════════════════════════════════════════════
 为什么不让 LLM 写
 ════════════════════════════════════════════════════════════════════
@@ -80,13 +88,36 @@ def _filter(scope: dict) -> str:
     return f"产品={prod_txt}；维度={dim}；{rtxt}"
 
 
+def _status(scope: dict) -> str | None:
+    """【状态】行：数字 + 状态 + 阈值来源三件套里的后两件（T-609）。
+
+    只渲染 `health_state()` 已经判定过的结果 —— 信封不自己比较阈值，
+    否则"阈值从哪来"就会散成两处（册子一处、渲染一处）。
+    没有可用状态（未声明阈值 / 算不出）就返回 None：不出状态行，
+    也不写"正常"来补空。
+    """
+    hs = scope.get("health") or []
+    if not hs:
+        return None
+    bits = []
+    for h in hs:
+        label = f"{h.get('name') or h.get('metric_id')}={h['state']}"
+        if h.get("side"):
+            label += f"（{h['side']}）"
+        bits.append(f"{label}，阈值来源：{h['source']}")
+    return "；".join(bits)
+
+
 def render(scope: dict, as_of: str | None = None) -> str:
-    """生成 4 行（+ 可选第 5 行）口径信封。固定格式，机器可解析。"""
+    """生成 4 行（+ 可选状态行 + 可选第 5 行）口径信封。固定格式，机器可解析。"""
     as_of = as_of or scope.get("as_of") or catalog.AS_OF
-    lines = [f"【口径】{_caliber(scope)}",
-             f"【窗口】{_window(scope)}",
-             f"【过滤】{_filter(scope)}",
-             f"【截止】数据截至 {as_of}（{T_AS_OF} 快照）"]
+    lines = [f"【口径】{_caliber(scope)}"]
+    st = _status(scope)
+    if st:
+        lines.append(f"{STATUS_KEY}{st}")
+    lines += [f"【窗口】{_window(scope)}",
+              f"【过滤】{_filter(scope)}",
+              f"【截止】数据截至 {as_of}（{T_AS_OF} 快照）"]
     extra = scope.get("extra")
     if extra:
         # 模型级指标的第 5 行：分箱与参照期（"10 箱"必须带切点，否则等于没写）
@@ -95,21 +126,28 @@ def render(scope: dict, as_of: str | None = None) -> str:
 
 
 KEYS = ("【口径】", "【窗口】", "【过滤】", "【截止】")
+STATUS_KEY = "【状态】"
 
 
 def parse(text: str) -> dict:
     """把信封解析回结构化字段（评估器 15 用它和 trace 逐项比对）。"""
     out: dict = {}
     for line in (text or "").splitlines():
-        for k in KEYS + ("【分箱】",):
+        for k in KEYS + (STATUS_KEY, "【分箱】"):
             if line.startswith(k):
                 out[k.strip("【】")] = line[len(k):].strip()
     return out
 
 
-def validate(text: str, need_extra: bool = False) -> dict:
-    """四要素齐全吗？留空与"不适用"必须能区分。"""
+def validate(text: str, need_extra: bool = False,
+             need_status: bool = False) -> dict:
+    """四要素齐全吗？留空与"不适用"必须能区分。
+
+    `need_status` 只给"有阈值的标量回答"用：那类回答少了状态行，
+    就等于数字旁边没有结论；其余回答不该被强制带状态行。
+    """
     got = parse(text)
-    need = list(KEYS) + (["【分箱】"] if need_extra else [])
+    need = list(KEYS) + (["【分箱】"] if need_extra else []) \
+        + ([STATUS_KEY] if need_status else [])
     missing = [k.strip("【】") for k in need if not got.get(k.strip("【】"))]
     return {"ok": not missing, "missing": missing, "fields": got}

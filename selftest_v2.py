@@ -35,7 +35,7 @@ from eval.compare_plans import diff_plans
 from scheduler import registry as sched
 from tools import compute_model_metric as model_tool
 from tools import registry as tool_registry
-from v2_dialogue import (CFG_CUR, RUN_CUR, DialogEngine, ask,
+from v2_dialogue import (CFG_CUR, RUN_CUR, DialogEngine, ask, guard_narrative,
                          set_verbosity, prepare, validate_plan_v2)
 
 ART = Path("artifacts")
@@ -223,6 +223,30 @@ def main() -> None:
     check("伪造数字会被拦下", chk["ok"] is False and "88.8%" in chk["stray"])
     good = verify_numbers(a1.get("answer") or "", b1)
     check("正常回答可以追溯", good["ok"] is True, str(good["stray"]))
+
+    # ---------------------------------------------------------------
+    print("\n[9b] 阈值进回答：数字 + 状态 + 阈值来源（T-609）")
+    out_fpd = ask(eng, graph, "现金贷近一个月的 FPD7 是多少", sid="T-HEALTH")
+    ans_fpd = out_fpd.get("answer") or ""
+    st_fpd = envelope.parse(ans_fpd).get("状态", "")
+    v_fpd = (out_fpd.get("book") or {}).get("fpd7_rate.value") or {}
+    hs = catalog.health_state("fpd7_rate", v_fpd.get("value"))
+    check("正向：FPD7 回答同时出现 数字 / 状态 / 阈值来源，且数字可溯源",
+          "【状态】" in ans_fpd and bool(st_fpd)
+          and hs["state"] in st_fpd
+          and "册子 v" in st_fpd
+          and f"{v_fpd.get('value', 0):.1%}" in ans_fpd
+          and verify_numbers(ans_fpd, out_fpd.get("book") or {})["ok"],
+          st_fpd[:110])
+    # 反向：① 未声明 healthy_range 的指标不出状态行（不许猜）；
+    #       ② 模型自带的"偏高/关注"必须被闸门整段丢弃并回退模板（D1）
+    out_tab = ask(eng, graph, "现金贷近一个月每个策略的通过率", sid="T-NOSTATUS")
+    gate = guard_narrative("FPD7 当前偏高，建议关注。",
+                           out_fpd.get("book") or {}, "【模板】", set())
+    check("反向：无阈值指标无状态行；模型自判状态词被丢弃回模板",
+          "【状态】" not in (out_tab.get("answer") or "")
+          and gate["source"] == "template" and gate["reason"] == "model_state"
+          and gate["text"] == "【模板】", str(gate))
 
     # ---------------------------------------------------------------
     print("\n[10] 听不懂与兜底：不许白屏，不许悄悄猜")

@@ -704,6 +704,59 @@ def examples_for_role(role: str | None = None, defs=None) -> list[str]:
     return out
 
 
+HEALTH_STATES = ("正常", "异常")
+
+
+def health_state(metric_id: str, value) -> dict:
+    """按册子 `healthy_range` 判状态 —— **只读册子，不写死任何阈值**。
+
+    为什么这件事必须在 core 做：状态是"结论"，不是"表达"。模型看见 7%
+    自己写一句"偏高"，数字没错、结论却越权了（P-06/P-08）。
+    只有两档：`正常 / 异常`，严格由册子边界与 direction 判定。
+      lower_better（只有 high）→ ≤high 正常，>high 异常；
+      higher_better（只有 low） → ≥low 正常，<low 异常；
+      band（low+high 都在）    → 区间内正常，越界异常并标明哪一侧。
+    样本不足**不是健康档位**：它属于把握度提示，由渲染层单独写，不进状态。
+    三档预警（贴近边界即"关注"）需要册子增加 `warn_low/warn_high`（T-610），
+    本任务不靠乘数另造阈值。
+    没有声明阈值 → `applicable=False`（回答里写"不适用"，不给颜色，不许猜）。
+    """
+    m = CATALOG.get(metric_id)
+    hr = dict((getattr(m, "healthy_range", {}) or {})) if m else {}
+    if value is None or not hr:
+        return {"applicable": False, "state": "不适用", "side": "",
+                "source": "册子未声明阈值", "metric_id": metric_id,
+                "name": (m.name if m else metric_id)}
+    d = hr.get("direction", "band")
+    low, high = hr.get("low"), hr.get("high")
+    if d == "lower_better" and high is not None:
+        hit = value > high
+        state, side = ("异常", "高于阈值") if hit else ("正常", "")
+    elif d == "higher_better" and low is not None:
+        hit = value < low
+        state, side = ("异常", "低于阈值") if hit else ("正常", "")
+    elif d == "band" and low is not None and high is not None:
+        if value < low:
+            state, side = "异常", "低于下限"
+        elif value > high:
+            state, side = "异常", "高于上限"
+        else:
+            state, side = "正常", ""
+    else:
+        # 声明了阈值但字段不完整 → 同样不许猜
+        return {"applicable": False, "state": "不适用", "side": "",
+                "source": "册子阈值字段不完整", "metric_id": metric_id,
+                "name": (m.name if m else metric_id)}
+    bits = [f"册子 v{m.version}", f"direction={d}"]
+    if low is not None:
+        bits.append(f"low={low:.1%}")
+    if high is not None:
+        bits.append(f"high={high:.1%}")
+    return {"applicable": True, "state": state, "side": side,
+            "source": "，".join(bits), "metric_id": metric_id,
+            "name": m.name, "low": low, "high": high}
+
+
 def guard_call(metric_id: str, params: dict | None = None,
                role: str | None = None, as_of: str = AS_OF) -> dict:
     """闸门 ①.5：口径守卫。**不抛异常、不猜默认值**，只返回结构化错误码。

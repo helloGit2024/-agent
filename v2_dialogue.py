@@ -228,6 +228,32 @@ def verify_numbers(answer: str, book: dict) -> dict:
     return {"ok": not stray, "stray": stray, "allowed_n": len(allowed)}
 
 
+# 可能被模型用来"下结论"的词。它们只能来自 core 的 health_state，
+# 不能由叙述层自己判断（T-609）。
+STATE_WORDS = ("正常", "关注", "异常", "偏高", "偏低", "预警", "达标", "未达标")
+
+
+def guard_narrative(text: str, book: dict, template: str,
+                    allowed_states: set[str]) -> dict:
+    """叙述出口闸门（P-06 + T-609）：数字不可溯源或自判状态 → 丢弃、回退模板。
+
+    为什么要专门抓状态词：状态是 core 按册子阈值算出的**结论**。
+    模型看见 7% 顺手补一句"偏高"，数字没错、结论却越权了；这种句子
+    读起来最像人写的，也最难被发现，所以必须在出口整段丢弃（D1）。
+    `allowed_states` 只含 health_state 判过的状态，其余一律视为越权。
+    """
+    chk = verify_numbers(text, book)
+    if not chk["ok"]:
+        return {"text": template, "source": "template",
+                "reason": "stray_numbers", "stray": chk["stray"]}
+    bad = [w for w in STATE_WORDS
+           if w in (text or "") and w not in allowed_states]
+    if bad:
+        return {"text": template, "source": "template",
+                "reason": "model_state", "states": bad}
+    return {"text": text, "source": "llm"}
+
+
 # ---------------------------------------------------------------------------
 # 计划校验（V2 版）：语义层 ID 必须注册 + 步骤必须合法
 # ---------------------------------------------------------------------------
@@ -550,6 +576,17 @@ class DialogEngine:
                          metric_id=mid, note=m.name)
                 book.put(f"{mid}.n", res.get("denominator_n"), "int",
                          metric_id=mid, note="分母")
+                # ★T-609：状态由 core 按册子 healthy_range 判定，叙述层只引用。
+                #   阈值数字同样登记（登记簿是正文数字的唯一来源）。
+                h = catalog.health_state(mid, res.get("value"))
+                if h["applicable"]:
+                    out.setdefault("health", []).append(h)
+                    book.put(f"health.{mid}.state", h["state"], "raw",
+                             metric_id=mid, note="区间状态")
+                    for k in ("low", "high"):
+                        if h.get(k) is not None:
+                            book.put(f"health.{mid}.{k}", h[k], "pct",
+                                     metric_id=mid, note=f"册子阈值 {k}")
             else:
                 for row in res["rows"]:
                     key = row.get("policy_id") or row.get("stage")
@@ -807,15 +844,27 @@ class DialogEngine:
     # ---------------- 节点 5：叙述（唯一"像 LLM"的地方，默认模板） ----------------
     def n_narrate(self, state: DState) -> dict:
         parsed, res, book = state["parsed"], state["result"], state["book"]
-        text = self._render(parsed, res, book)
+        template = self._render(parsed, res, book)
+        # ★T-609：状态词只能来自 health_state。叙述换成模型产物（S4）时，
+        #   这两种情况必须整段丢弃回模板：① 数字不可溯源；② 模型自己判状态。
+        #   现在叙述是模板，闸门对它是恒等通过（模板本身不写状态词）。
+        narr_gate = None
+        text = template
+        if parsed["intent"] == intent.INTENT_STATS and res.get("kind") != "degraded":
+            allowed = {h["state"] for h in (res.get("health") or [])
+                       if h.get("applicable")}
+            narr_gate = guard_narrative(template, book, template, allowed)
+            text = narr_gate["text"]
         chk = verify_numbers(text, book)
         self.db.auditor(state["session_id"]).append("answer.rendered", {
             "intent": parsed["intent"], "traceable": chk["ok"],
             "stray": chk["stray"]})
         lines = [f"[narrate] 回答 {len(text)} 字；数字溯源 "
                  f"{'✔ 全部登记' if chk['ok'] else '✘ 存在未登记数字 ' + str(chk['stray'])}"]
+        if narr_gate and narr_gate.get("reason"):
+            lines.append(f"[narrate] 叙述被闸门丢弃（{narr_gate['reason']}）→ 回退模板")
         return {"answer": text, "trace": lines,
-                "findings": {"verify": chk}}
+                "findings": {"verify": chk, "narrative": narr_gate}}
 
     def _render(self, parsed: dict, res: dict, book: dict) -> str:
         """模板叙述 —— 每个数字都从登记簿取，句子结构固定。
@@ -887,7 +936,8 @@ class DialogEngine:
             scope.update(metrics=list(res.get("metrics") or {}),
                          window=res.get("window"), product=prod,
                          product_name=pname, dimension="全部（整体口径）",
-                         row_filter=res.get("row_filter"))
+                         row_filter=res.get("row_filter"),
+                         health=res.get("health"))
         elif it == intent.INTENT_ANOMALY:
             mid = (res.get("metric")
                    or (parsed["slots"].get("metrics") or ["approval_rate"])[0])
@@ -1056,8 +1106,12 @@ class DialogEngine:
             lines.append(f"\n■ {m.name}（{m.formula}）")
             if m.kind == "scalar":
                 lines.append(f"  值 {b.fmt(mid + '.value')}，"
-                             f"分母 {b.fmt(mid + '.n')} 单"
-                             f"{'（⚠ 样本不足 30，结论仅供参考）' if r.get('sample_warning') else ''}")
+                             f"分母 {b.fmt(mid + '.n')} 单")
+                if r.get("sample_warning"):
+                    # ★T-609：样本不足是"把握度"问题，不是健康档位。
+                    #   写成状态会让读者以为"指标变差了"，这里必须说清。
+                    lines.append("  样本提示：分母不足 30 单，这个数只能看趋势，"
+                                 "不能用于下结论（这是样本/把握度提示，不是指标变差）")
             else:
                 has_other = False
                 for row in r["rows"]:
